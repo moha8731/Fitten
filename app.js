@@ -1,4 +1,4 @@
-/* BulkMind personal PWA. No backend required. Optional Gemini API key is stored locally for personal use only. */
+/* BulkMind personal PWA v4. No backend required. Optional Gemini API key is stored locally for personal use only. */
 const STORE_KEY = 'bulkmind.v1';
 const $ = (sel, parent = document) => parent.querySelector(sel);
 const $$ = (sel, parent = document) => [...parent.querySelectorAll(sel)];
@@ -179,7 +179,12 @@ function getRecentLogs(days = 30) {
 }
 function showView(id) {
   $$('.view').forEach(v => v.classList.remove('active'));
-  $('#' + id).classList.add('active');
+  const view = $('#' + id);
+  view.classList.add('active');
+  requestAnimationFrame(() => {
+    if (id === 'mainApp') { const c = $('.content-scroll'); if (c) c.scrollTop = 0; }
+    if (id === 'onboarding') scrollSetupToTop();
+  });
 }
 function showMain() {
   showView('mainApp');
@@ -196,6 +201,12 @@ function openModal(html) {
   $('#modal').showModal();
 }
 function closeModal() { $('#modal').close(); }
+function scrollSetupToTop() {
+  const form = $('#setupForm');
+  const card = $('.onboarding-card');
+  if (form) form.scrollTo({ top: 0, behavior: 'smooth' });
+  if (card) card.scrollTo?.({ top: 0, behavior: 'smooth' });
+}
 
 function init() {
   document.body.classList.toggle('light', state.theme === 'light');
@@ -226,12 +237,14 @@ function renderSetupStep() {
   if (step.choices) {
     form.innerHTML = `<div class="choice-grid full">${step.choices.map(c => `<button type="button" class="choice ${setupDraft[c.key] === c.value ? 'selected' : ''}" data-key="${c.key}" data-value="${c.value}">${c.title}<small>${c.sub}</small></button>`).join('')}</div>`;
     $$('.choice', form).forEach(btn => btn.addEventListener('click', () => { setupDraft[btn.dataset.key] = btn.dataset.value; renderSetupStep(); }));
+    requestAnimationFrame(scrollSetupToTop);
     return;
   }
   form.innerHTML = `<div class="form-grid">${step.fields.map(fieldHTML).join('')}</div>`;
   $$('input, select, textarea', form).forEach(el => {
     el.addEventListener('input', () => setupDraft[el.name] = el.value);
   });
+  requestAnimationFrame(scrollSetupToTop);
 }
 function fieldHTML(f) {
   const val = setupDraft[f.key] ?? defaults()[f.key] ?? '';
@@ -1238,20 +1251,3 @@ document.addEventListener('click', (event) => {
   event.preventDefault();
   askAboutFoodById(btn.dataset.id);
 });
-
-/* BulkMind v3 modal safety for iPhone/Safari and nested Ask AI actions */
-function openModal(html) {
-  const modal = $('#modal');
-  const body = $('#modalBody');
-  if (!modal || !body) return;
-  if (modal.open) modal.close();
-  body.innerHTML = html;
-  if (typeof modal.showModal === 'function') modal.showModal();
-  else modal.setAttribute('open', '');
-}
-function closeModal() {
-  const modal = $('#modal');
-  if (!modal) return;
-  if (modal.open && typeof modal.close === 'function') modal.close();
-  else modal.removeAttribute('open');
-}

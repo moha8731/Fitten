@@ -94,3 +94,15 @@ New in v3:
 5. Name it BulkMind and tap Add.
 
 After that it opens from your home screen like an app. Your data is saved locally on the iPhone/browser for that deployed URL.
+
+## v4 iPhone 13 mini optimization
+
+This version fixes the biggest small-screen issue: onboarding no longer traps the user when the profile setup page is taller than the screen. The setup header and buttons stay reachable, while the form scrolls in the middle.
+
+Other v4 improvements:
+- Better iPhone safe-area spacing.
+- Smaller cards and buttons on 375px screens.
+- Bottom navigation no longer eats content.
+- Modals have safer max-height.
+- Generated meal/shake action buttons stack better on small screens.
+- Reduced motion support.

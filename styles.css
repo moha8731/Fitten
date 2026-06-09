@@ -290,3 +290,265 @@ button, .action-card, .nav-item, .primary, .ghost, .icon-btn { min-height: 44px;
   .landing, .content-scroll, .chat-window { -webkit-overflow-scrolling: touch; }
   input, select, textarea { font-size: 16px !important; }
 }
+
+/* ===== BulkMind v4: iPhone 13 mini / small-screen rescue pass ===== */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --shell-pad: 12px;
+}
+html,
+body {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+body {
+  position: fixed;
+  inset: 0;
+}
+.app-shell {
+  width: min(100vw, 500px);
+  height: 100svh;
+  min-height: 0;
+  padding: max(10px, calc(8px + var(--safe-top))) var(--shell-pad) max(10px, calc(8px + var(--safe-bottom)));
+  overflow: hidden;
+}
+@supports (height: 100dvh) {
+  .app-shell { height: 100dvh; }
+}
+.view {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.landing.active {
+  display: block;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(18px + var(--safe-bottom));
+}
+.hero-card {
+  min-height: auto;
+  padding: 22px;
+  border-radius: 28px;
+}
+.hero-card h1 { font-size: clamp(42px, 13vw, 64px); }
+.hero-copy { font-size: 14px; }
+.hero-metrics { gap: 8px; }
+.feature-card { min-height: 124px; }
+
+/* Onboarding must never trap the user. Header/actions stay visible, form scrolls. */
+.onboarding.active {
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  min-height: 0;
+}
+.onboarding-card {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  border-radius: 26px;
+  overflow: hidden;
+}
+.onboarding-card::after {
+  width: 150px;
+  height: 150px;
+  right: -62px;
+  top: -58px;
+  opacity: .8;
+}
+.step-head {
+  flex: 0 0 auto;
+  gap: 8px;
+  min-height: 44px;
+}
+.step-head h2 {
+  font-size: clamp(18px, 5.2vw, 22px);
+  line-height: 1.05;
+}
+.step-head .icon-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  flex: 0 0 auto;
+}
+#stepCount { white-space: nowrap; }
+.progress-track {
+  flex: 0 0 auto;
+  height: 8px;
+  margin: 4px 0 2px;
+}
+.setup-form {
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  height: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  align-content: start;
+  padding: 4px 2px 14px;
+  scroll-padding-bottom: 120px;
+}
+.form-grid,
+.choice-grid {
+  min-height: 0;
+}
+.step-actions {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: .9fr 1.1fr;
+  gap: 8px;
+  padding-top: 8px;
+  padding-bottom: max(0px, calc(var(--safe-bottom) * .25));
+  background: linear-gradient(180deg, transparent, rgba(9, 9, 15, .84) 22%, rgba(9, 9, 15, .94));
+  margin-top: -4px;
+}
+body.light .step-actions {
+  background: linear-gradient(180deg, transparent, rgba(247, 244, 239, .86) 22%, rgba(247, 244, 239, .96));
+}
+.step-actions .primary,
+.step-actions .ghost {
+  min-height: 48px;
+  border-radius: 16px;
+  padding: 11px 12px;
+}
+
+/* Main app small-screen stability */
+.main-app.active {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+}
+.topbar {
+  flex: 0 0 auto;
+  border-radius: 22px;
+  padding: 10px;
+}
+.content-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 1px 0 calc(92px + var(--safe-bottom));
+}
+.bottom-nav {
+  position: absolute;
+  left: var(--shell-pad);
+  right: var(--shell-pad);
+  bottom: max(8px, calc(8px + var(--safe-bottom)));
+  padding: 6px;
+  border-radius: 22px;
+  gap: 3px;
+}
+.nav-item {
+  height: 52px;
+  min-height: 52px;
+  border-radius: 17px;
+}
+.card {
+  border-radius: 22px;
+  padding: 14px;
+}
+.card p { margin: 8px 0; }
+.quick-actions,
+.form-grid,
+.choice-grid,
+.metric-grid,
+.coach-controls,
+.two,
+.three {
+  gap: 9px;
+}
+.input-row {
+  grid-template-columns: 1fr;
+  gap: 9px;
+}
+.generated-actions {
+  grid-template-columns: 1fr;
+}
+.modal {
+  width: min(calc(100vw - 20px), 480px);
+  max-height: calc(100svh - 20px - var(--safe-top) - var(--safe-bottom));
+  border-radius: 24px;
+  padding: 14px;
+}
+@supports (max-height: 100dvh) {
+  .modal { max-height: calc(100dvh - 20px - var(--safe-top) - var(--safe-bottom)); }
+}
+.toast {
+  bottom: calc(82px + var(--safe-bottom));
+}
+
+@media (max-width: 430px) {
+  :root { --shell-pad: 10px; }
+  .app-shell { padding-left: var(--shell-pad); padding-right: var(--shell-pad); }
+  .hero-card { padding: 18px; }
+  .feature-grid { grid-template-columns: 1fr 1fr; gap: 9px; }
+  .feature-card { padding: 12px; min-height: 112px; border-radius: 20px; }
+  .feature-card h3 { font-size: 14px; }
+  .feature-card p { font-size: 12px; }
+  .form-grid,
+  .choice-grid,
+  .metric-grid,
+  .quick-actions,
+  .coach-controls,
+  .two,
+  .three {
+    grid-template-columns: 1fr;
+  }
+  label { gap: 6px; font-size: 12px; }
+  input, select, textarea { padding: 12px; border-radius: 14px; }
+  textarea { min-height: 92px; }
+  .choice {
+    min-height: 56px;
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .choice small { margin-top: 3px; }
+  .big-ring { min-height: 180px; }
+  .ring-bg { width: 142px; height: 142px; }
+  .ring-inner { width: 110px; height: 110px; }
+  .ring-inner strong { font-size: 27px; }
+  .action-card { min-height: 76px; padding: 12px; border-radius: 18px; }
+  .mini-stat { padding: 11px; border-radius: 17px; }
+  #greeting { font-size: 17px; max-width: 180px; }
+  .app-mark { width: 38px; height: 38px; }
+  .top-actions .icon-btn { width: 38px; height: 38px; }
+  .nav-item small { display: none; }
+  .nav-item span { font-size: 20px; }
+}
+
+@media (max-height: 720px) {
+  .app-shell { padding-top: max(8px, calc(6px + var(--safe-top))); }
+  .onboarding-card { gap: 7px; padding: 10px; border-radius: 22px; }
+  .eyebrow { font-size: 10px; }
+  .progress-track { height: 7px; }
+  .setup-form { gap: 9px; }
+  .form-grid, .choice-grid { gap: 9px; }
+  .step-actions .primary, .step-actions .ghost { min-height: 46px; }
+  .topbar { padding: 8px 9px; }
+  .content-scroll { padding-bottom: calc(82px + var(--safe-bottom)); }
+  .bottom-nav { bottom: max(6px, calc(6px + var(--safe-bottom))); }
+  .nav-item { height: 48px; min-height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}

@@ -1,10 +1,11 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#09090f" />
-  <meta name="description" content="BulkMind - personal AI bulk, meal, shake and training coach." />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <meta name="theme-color" content="#0b0d12" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="description" content="BulkMind — a personal AI nutrition, shake, workout and progress coach." />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="BulkMind" />
@@ -12,100 +13,31 @@
   <meta name="format-detection" content="telephone=no" />
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="icon" href="icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
   <title>BulkMind</title>
 </head>
 <body>
-  <div class="noise"></div>
-  <div class="aurora aurora-one"></div>
-  <div class="aurora aurora-two"></div>
+  <div id="app" class="app-root" aria-live="polite"></div>
 
-  <main id="app" class="app-shell">
-    <section id="landing" class="landing view active" data-view="landing">
-      <div class="hero-card glass elevated">
-        <div class="hero-topline">
-          <span class="app-mark">B</span>
-          <span class="pill">Personal bulk OS</span>
-        </div>
-        <h1>BulkMind</h1>
-        <p class="hero-copy">An AI-powered personal fitness app that learns your weight goal, appetite, budget, foods, workouts and daily habits — then helps you actually hit the plan.</p>
-        <div class="hero-metrics">
-          <div><strong id="heroCurrent">60</strong><span>kg now</span></div>
-          <div><strong id="heroTarget">80</strong><span>kg goal</span></div>
-          <div><strong>AI</strong><span>meals & shakes</span></div>
-        </div>
-        <button class="primary big" id="startBtn">Start my plan</button>
-        <button class="ghost big" id="demoBtn">Open demo dashboard</button>
+  <dialog id="sheet" class="sheet">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-header">
+      <div>
+        <p id="sheetEyebrow" class="eyebrow"></p>
+        <h2 id="sheetTitle">BulkMind</h2>
       </div>
-      <div class="feature-grid">
-        <article class="feature-card glass"><span>🥤</span><h3>Calorie gap shakes</h3><p>Behind by 700 kcal? It builds a shake for that exact gap.</p></article>
-        <article class="feature-card glass"><span>📈</span><h3>Smart graphs</h3><p>Weight trend, protein consistency, workout volume and projections.</p></article>
-        <article class="feature-card glass"><span>🧠</span><h3>AI memory</h3><p>Saves likes, dislikes, problems, routine and what actually works.</p></article>
-        <article class="feature-card glass"><span>💸</span><h3>Broke mode</h3><p>Cheap student meals, simple ingredients and high calories.</p></article>
-      </div>
-    </section>
-
-    <section id="onboarding" class="view onboarding" data-view="onboarding" aria-live="polite">
-      <div class="onboarding-card glass elevated">
-        <div class="step-head">
-          <button class="icon-btn" id="backStep" aria-label="Back">←</button>
-          <div>
-            <p class="eyebrow">Setup</p>
-            <h2 id="stepTitle">Tell BulkMind who you are</h2>
-          </div>
-          <span id="stepCount" class="pill">1/6</span>
-        </div>
-        <div class="progress-track"><div id="setupProgress" class="progress-fill"></div></div>
-        <form id="setupForm" class="setup-form"></form>
-        <div class="step-actions">
-          <button class="ghost" id="skipOnboarding" type="button">Use demo data</button>
-          <button class="primary" id="nextStep" type="button">Next</button>
-        </div>
-      </div>
-    </section>
-
-    <section id="mainApp" class="view main-app" data-view="mainApp">
-      <header class="topbar glass">
-        <div class="brand-wrap">
-          <span class="app-mark">B</span>
-          <div>
-            <p class="eyebrow" id="todayLabel">Today</p>
-            <h2 id="greeting">Welcome back</h2>
-          </div>
-        </div>
-        <div class="top-actions">
-          <button class="icon-btn" id="installBtn" title="Install app">⬇</button>
-          <button class="icon-btn" id="themeBtn" title="Toggle theme">☾</button>
-        </div>
-      </header>
-
-      <div class="content-scroll">
-        <section id="homeView" class="tab-view active"></section>
-        <section id="foodView" class="tab-view"></section>
-        <section id="trainingView" class="tab-view"></section>
-        <section id="progressView" class="tab-view"></section>
-        <section id="coachView" class="tab-view"></section>
-        <section id="profileView" class="tab-view"></section>
-      </div>
-
-      <nav class="bottom-nav glass" aria-label="Main navigation">
-        <button data-tab="homeView" class="nav-item active"><span>⌂</span><small>Home</small></button>
-        <button data-tab="foodView" class="nav-item"><span>🍽</span><small>Food</small></button>
-        <button data-tab="trainingView" class="nav-item"><span>🏋</span><small>Train</small></button>
-        <button data-tab="progressView" class="nav-item"><span>📈</span><small>Progress</small></button>
-        <button data-tab="coachView" class="nav-item"><span>🧠</span><small>Coach</small></button>
-        <button data-tab="profileView" class="nav-item"><span>⚙</span><small>Me</small></button>
-      </nav>
-    </section>
-  </main>
-
-  <dialog id="modal" class="glass modal">
-    <button class="icon-btn close-modal" id="closeModal">×</button>
-    <div id="modalBody"></div>
+      <button id="closeSheet" class="icon-button" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="sheetBody" class="sheet-body"></div>
   </dialog>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="updateBar" class="update-bar hidden">
+    <span>A new BulkMind version is ready.</span>
+    <button id="reloadApp" type="button">Update</button>
+  </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

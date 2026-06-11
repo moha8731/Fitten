@@ -1,4 +1,4 @@
-const APP_VERSION = 5;
+const APP_VERSION = 8;
 const LEGACY_KEY = 'bulkmind.v1';
 const DB_NAME = 'bulkmind-db';
 const DB_STORE = 'kv';
@@ -17,7 +17,9 @@ const defaultProfile = {
   goalType: 'bulk', activityLevel: 'moderate', aggression: 'balanced', trainingDays: 3,
   trainingPlace: 'home', appetite: 'low', budget: 'budget', restrictions: 'halal',
   likedFoods: 'milk, oats, banana, peanut butter, chicken, rice, eggs, pasta, yogurt',
-  dislikedFoods: '', schedule: 'School during the day, training in the evening', coachTone: 'chill'
+  dislikedFoods: '', schedule: 'School during the day, training in the evening', coachTone: 'chill',
+  targetMode: 'auto', customCalories: '', customProtein: '', customCarbs: '', customFat: '',
+  targetMonths: 8, lastGoalPlan: null
 };
 
 const initialState = {
@@ -28,6 +30,7 @@ const initialState = {
   logs: {},
   savedFoods: [],
   generatedFoods: [],
+  products: [],
   workoutPlan: null,
   workoutLogs: [],
   chat: [],
@@ -39,6 +42,9 @@ let db;
 let onboardingStep = 0;
 let activeWorkout = null;
 let pendingWorker = null;
+let pendingGoalPlan = null;
+let pendingProduct = null;
+let pendingCameraStream = null;
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -112,7 +118,18 @@ function calculateTargets(profile) {
   const fat = Math.max(45, Math.round(Number(p.currentWeight) * .85));
   const carbs = Math.max(120, Math.round((calories - protein * 4 - fat * 9) / 4));
   const weekly = p.goalType === 'cut' ? -.4 : p.goalType === 'lean-bulk' ? .25 : p.goalType === 'bulk' ? .4 : .15;
-  return { bmr: Math.round(bmr), maintenance, calories, protein, carbs, fat, weekly };
+  const auto = { bmr: Math.round(bmr), maintenance, calories, protein, carbs, fat, weekly, mode: 'auto' };
+  if (p.targetMode === 'custom') {
+    const customCalories = clamp(Number(p.customCalories) || auto.calories, 1500, 6000);
+    const customProtein = clamp(Number(p.customProtein) || auto.protein, 40, 300);
+    const customFat = clamp(Number(p.customFat) || auto.fat, 25, 220);
+    const customCarbs = clamp(Number(p.customCarbs) || Math.round((customCalories - customProtein * 4 - customFat * 9) / 4), 50, 900);
+    return { ...auto, calories: customCalories, protein: customProtein, carbs: customCarbs, fat: customFat, mode: 'custom' };
+  }
+  return auto;
+}
+function recommendedTargets(profile = state.profile || defaultProfile) {
+  return calculateTargets({ ...profile, targetMode: 'auto' });
 }
 function getTargets() { return calculateTargets(state.profile || defaultProfile); }
 function getLog(date = todayISO()) {
@@ -231,7 +248,7 @@ function todayScreen() {
   const proteinGap = Math.max(0, t.protein - log.protein);
   return `<div class="hero-status card"><div class="calorie-big"><p class="eyebrow">Today</p><strong>${round(log.calories)}</strong><span>of ${t.calories} kcal · ${gap} remaining</span></div><div class="goal-ring" style="--progress:${pct}%"><div><strong>${pct}%</strong><span>complete</span></div></div></div>
     <div class="macro-grid">${macroCard('Protein',log.protein,t.protein,'g')}${macroCard('Carbs',log.carbs,t.carbs,'g')}${macroCard('Fat',log.fat,t.fat,'g')}</div>
-    <div class="quick-grid"><button class="quick-action" data-action="smart-shake"><span class="icon">🥤</span><strong>Fill the gap</strong><small>Make a ${gap || 500} kcal shake</small></button><button class="quick-action" data-action="smart-meal"><span class="icon">🍛</span><strong>Make a meal</strong><small>Built for ${proteinGap}g protein left</small></button><button class="quick-action" data-action="open-coach"><span class="icon">✦</span><strong>Ask coach</strong><small>Use all your saved context</small></button><button class="quick-action" data-action="log-weight"><span class="icon">⚖</span><strong>Log weight</strong><small>${latestWeightText()}</small></button></div>
+    <div class="quick-grid"><button class="quick-action" data-action="smart-shake"><span class="icon">🥤</span><strong>Start with a shake</strong><small>${gap > 1200 ? 'Make a 800 kcal shake' : `Make a ${gap || 500} kcal shake`}</small></button><button class="quick-action" data-action="smart-meal"><span class="icon">🍛</span><strong>Make a meal</strong><small>Built for ${proteinGap}g protein left</small></button><button class="quick-action" data-action="open-coach"><span class="icon">✦</span><strong>Ask coach</strong><small>Use all your saved context</small></button><button class="quick-action" data-action="log-weight"><span class="icon">⚖</span><strong>Log weight</strong><small>${latestWeightText()}</small></button></div>
     <div class="insight card"><div class="insight-icon">✦</div><div><p class="eyebrow">Best next action</p><p>${dailyInsight(log,t)}</p></div></div>
     <div><div class="section-title"><div><p class="eyebrow">Timeline</p><h3>Today’s log</h3></div>${log.entries.length?`<button class="link-button" data-action="edit-log">Edit</button>`:''}</div>${entryList(log)}</div>`;
 }
@@ -252,19 +269,22 @@ function entryList(log) {
 
 function foodScreen() {
   const seg=state.ui.foodSegment || 'generate';
-  return `<div class="segmented"><button data-action="food-segment" data-segment="generate" class="${seg==='generate'?'active':''}">Generate</button><button data-action="food-segment" data-segment="log" class="${seg==='log'?'active':''}">Quick log</button><button data-action="food-segment" data-segment="saved" class="${seg==='saved'?'active':''}">Saved</button></div>${seg==='generate'?foodGenerateHTML():seg==='log'?foodLogHTML():savedFoodHTML()}`;
+  return `<div class="segmented"><button data-action="food-segment" data-segment="generate" class="${seg==='generate'?'active':''}">Generate</button><button data-action="food-segment" data-segment="log" class="${seg==='log'?'active':''}">Quick log</button><button data-action="food-segment" data-segment="products" class="${seg==='products'?'active':''}">Products</button><button data-action="food-segment" data-segment="saved" class="${seg==='saved'?'active':''}">Saved</button></div>${seg==='generate'?foodGenerateHTML():seg==='log'?foodLogHTML():seg==='products'?productLibraryHTML():savedFoodHTML()}`;
 }
 function foodGenerateHTML() {
   const {calorieGap,proteinGap}=currentGaps();
-  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
+  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><button class="secondary full" data-action="scan-food">Scan milk / protein / label</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
     <div class="section-title"><div><p class="eyebrow">Recently generated</p><h3>Ready to reuse</h3></div></div>${recentGeneratedHTML()}`;
 }
 function foodLogHTML() {
-  return `<div class="card card-pad stack"><div><h3>Lazy log</h3><p class="subtle">Type what you ate normally. BulkMind estimates it and lets you confirm.</p></div><textarea id="lazyLogText" placeholder="Example: 2 eggs, 3 pieces of toast, milk and a chicken wrap"></textarea><button class="primary full" data-action="lazy-log">Estimate and add</button></div><button class="secondary full" data-action="manual-log">Enter calories and macros manually</button>`;
+  return `<div class="card card-pad stack"><div><h3>Lazy log</h3><p class="subtle">Type what you ate normally. BulkMind estimates it and lets you confirm.</p></div><textarea id="lazyLogText" placeholder="Example: 2 eggs, 3 pieces of toast, milk and a chicken wrap"></textarea><button class="primary full" data-action="lazy-log">Estimate and add</button></div><div class="quick-grid tight"><button class="quick-action" data-action="scan-food"><span class="icon">▣</span><strong>Scan product</strong><small>Barcode, API or label photo</small></button><button class="quick-action" data-action="manual-log"><span class="icon">123</span><strong>Manual macros</strong><small>Enter exact numbers</small></button></div>`;
 }
 function savedFoodHTML() {
   if (!state.savedFoods.length) return `<div class="empty card">Save a generated meal or shake and it will appear here for one-tap reuse.</div>`;
   return `<div class="stack">${state.savedFoods.map(foodCardHTML).join('')}</div>`;
+}
+function productLibraryHTML() {
+  return `<div class="card card-pad stack"><div><h3>Product library</h3><p class="subtle">Save exact milk, protein powder, skyr and other products here. Gemini will use these when making meals and shakes.</p></div><button class="primary full" data-action="scan-food">Add product by scan/API</button></div>${state.products?.length?`<div class="stack">${state.products.map(productCardHTML).join('')}</div>`:`<div class="empty card">No products saved yet. Add your actual milk or protein powder so BulkMind stops guessing.</div>`}`;
 }
 function recentGeneratedHTML() {
   const foods=state.generatedFoods.slice(0,5);
@@ -332,11 +352,11 @@ async function handleClick(event) {
   const action=button.dataset.action;
   const actions={
     'start-onboarding':()=>startOnboarding(false),'use-demo':useDemo,'onboarding-back':onboardingBack,'onboarding-next':onboardingNext,'cancel-onboarding':cancelOnboarding,
-    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,
+    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,'scan-food':openScanHub,'manual-barcode':openManualBarcode,'lookup-barcode':lookupBarcodeFromForm,'start-camera-scan':startBarcodeCamera,'scan-label':openLabelScan,'process-label-photo':processLabelPhoto,'manual-product':openManualProduct,'save-product-manual':saveManualProduct,'add-product-portion':()=>addProductPortion(button.dataset.id),'save-product-from-review':saveProductFromReview,'review-product':()=>reviewSavedProduct(button.dataset.id),'delete-product':()=>deleteProduct(button.dataset.id),
     'food-segment':()=>{state.ui.foodSegment=button.dataset.segment;saveState();render()},'preset-generate':()=>openGenerator(button.dataset.preset),'lazy-log':lazyLog,'manual-log':openManualLog,
     'add-food':()=>{const f=findFood(button.dataset.id);if(f){addEntry(f);closeSheet()}},'save-food':()=>saveFood(button.dataset.id),'ask-food':()=>openFoodChat(button.dataset.id),'delete-generated':()=>deleteGenerated(button.dataset.id),
     'generate-workout':generateWorkoutPlan,'toggle-set':()=>toggleSet(button.dataset.ex,button.dataset.set),'finish-workout':finishWorkout,'weekly-checkin':openWeeklyCheckin,'edit-log':openEditLog,
-    'save-settings':saveSettings,'toggle-theme':toggleTheme,'export-data':exportData,'import-data':()=>$('#importFile')?.click(),'reset-app':resetApp,'install-help':openInstallHelp,'edit-profile':openProfileEditor,
+    'save-settings':saveSettings,'toggle-theme':toggleTheme,'export-data':exportData,'import-data':()=>$('#importFile')?.click(),'reset-app':resetApp,'install-help':openInstallHelp,'edit-profile':openProfileEditor,'edit-targets':openTargetEditor,'save-targets':saveTargets,'open-goal-planner':openGoalPlanner,'calculate-goal-targets':calculateGoalTargets,'apply-goal-targets':applyGoalTargets,
     'submit-generator':submitGenerator,'send-chat':()=>sendChat(button),'submit-weight':submitWeight,'submit-manual-log':submitManualLog,'submit-checkin':submitCheckin,'remove-entry':()=>removeEntry(button.dataset.id)
   };
   if(actions[action]) await actions[action]();
@@ -379,24 +399,34 @@ function cancelOnboarding(){state.onboardingDraft=null;saveState();render()}
 function collectOnboarding(){ $$('.onboarding [name]').forEach(el=>{state.onboardingDraft.profile[el.name]=el.value});state.onboardingDraft.step=onboardingStep;saveState(); }
 function validateOnboardingStep(){collectOnboarding();const p=state.onboardingDraft.profile;let errors={};if(onboardingStep===0){if(!String(p.name).trim())errors.name='Add your name.';for(const key of ['age','height','currentWeight','targetWeight'])if(!(Number(p[key])>0))errors[key]='Enter a valid number.';if(Number(p.targetWeight)===Number(p.currentWeight)&&['bulk','lean-bulk','cut'].includes(p.goalType))errors.targetWeight='Choose a different target weight.'}Object.entries(errors).forEach(([key,msg])=>{const el=$(`#${key}-error`);if(el)el.textContent=msg});const first=Object.keys(errors)[0];if(first)$(`#${first}`)?.focus();return !first}
 async function onboardingNext(){if(!validateOnboardingStep())return;if(onboardingStep<2){onboardingStep++;state.onboardingDraft.step=onboardingStep;await saveState();render();return}state.profile=normalizeProfile(state.onboardingDraft.profile);state.onboardingDraft=null;state.workoutPlan=buildWorkoutPlan(state.profile);await saveState();render();toast('Your plan is ready')}
-function normalizeProfile(p){return {...defaultProfile,...p,age:Number(p.age),height:Number(p.height),currentWeight:Number(p.currentWeight),targetWeight:Number(p.targetWeight),trainingDays:clamp(p.trainingDays,1,7)}}
+function normalizeProfile(p){const merged={...defaultProfile,...p};return {...merged,age:Number(merged.age),height:Number(merged.height),currentWeight:Number(merged.currentWeight),targetWeight:Number(merged.targetWeight),trainingDays:clamp(merged.trainingDays,1,7),targetMode:merged.targetMode==='custom'?'custom':'auto',customCalories:merged.customCalories===''?'':Number(merged.customCalories),customProtein:merged.customProtein===''?'':Number(merged.customProtein),customCarbs:merged.customCarbs===''?'':Number(merged.customCarbs),customFat:merged.customFat===''?'':Number(merged.customFat),targetMonths:clamp(merged.targetMonths||8,1,36),lastGoalPlan:merged.lastGoalPlan||null}}
 function switchTab(tab){state.ui.tab=tab;saveState();render()}
 
 function openSheet(title,eyebrow,html){const sheet=$('#sheet');$('#sheetTitle').textContent=title;$('#sheetEyebrow').textContent=eyebrow||'';$('#sheetBody').innerHTML=html;if(!sheet.open)sheet.showModal();requestAnimationFrame(()=>$('#sheetBody').scrollTop=0)}
-function closeSheet(){if($('#sheet').open)$('#sheet').close()}
+function closeSheet(){stopCameraStream();if($('#sheet').open)$('#sheet').close()}
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('show'),2300)}
 
-function openQuickLog(){openSheet('Quick add','Fast actions',`<div class="quick-grid"><button class="quick-action" data-action="manual-log"><span class="icon">123</span><strong>Manual macros</strong><small>Fastest exact entry</small></button><button class="quick-action" data-action="log-weight"><span class="icon">⚖</span><strong>Weight</strong><small>Track the trend</small></button><button class="quick-action" data-action="smart-shake"><span class="icon">🥤</span><strong>Generate shake</strong><small>Fill the calorie gap</small></button><button class="quick-action" data-action="open-coach"><span class="icon">✦</span><strong>Ask coach</strong><small>Get a quick answer</small></button></div>`) }
+function openQuickLog(){openSheet('Quick add','Fast actions',`<div class="quick-grid"><button class="quick-action" data-action="manual-log"><span class="icon">123</span><strong>Manual macros</strong><small>Fastest exact entry</small></button><button class="quick-action" data-action="scan-food"><span class="icon">▣</span><strong>Scan product</strong><small>Use exact nutrition</small></button><button class="quick-action" data-action="log-weight"><span class="icon">⚖</span><strong>Weight</strong><small>Track the trend</small></button><button class="quick-action" data-action="smart-shake"><span class="icon">🥤</span><strong>Generate shake</strong><small>Fill the calorie gap</small></button><button class="quick-action" data-action="open-coach"><span class="icon">✦</span><strong>Ask coach</strong><small>Get a quick answer</small></button></div>`) }
 
 function currentGaps(){const l=getLog(),t=getTargets();return{calorieGap:Math.max(0,round(t.calories-l.calories)),proteinGap:Math.max(0,round(t.protein-l.protein))}}
+function generatorDefaults(kind='meal') {
+  const gaps = currentGaps();
+  const isShake = kind === 'shake' || kind === 'low-volume';
+  const calories = gaps.calorieGap <= 0 ? 500 : gaps.calorieGap > 1200 ? (isShake ? 800 : 700) : gaps.calorieGap;
+  const protein = gaps.proteinGap <= 0 ? 25 : gaps.proteinGap > 60 ? (isShake ? 35 : 45) : gaps.proteinGap;
+  return { calories, protein };
+}
 function openGenerator(kind='meal') {
-  const gaps=currentGaps(); const isShake=kind==='shake'||kind==='low-volume';
+  const gaps=currentGaps(); const defaults=generatorDefaults(kind); const isShake=kind==='shake'||kind==='low-volume';
+  const productSummary = productLibrarySummary();
   const title=isShake?'Build my shake':'Build my meal';
   openSheet(title,'Personal generator',`<form class="sheet-form" id="generatorForm">
-    <div class="form-grid">${field('targetCalories','Target calories','number',gaps.calorieGap||700)}${field('targetProtein','Target protein (g)','number',gaps.proteinGap||35)}
+    <div class="card card-pad"><strong>Suggested portion</strong><p class="subtle">You still need ${gaps.calorieGap} kcal today, but this will build a realistic ${defaults.calories} kcal ${isShake?'shake':'meal'} instead of trying to force your whole day at once.</p></div>
+    <div class="form-grid">${field('targetCalories','Target calories','number',defaults.calories)}${field('targetProtein','Target protein (g)','number',defaults.protein)}
     ${selectField('mode','Priority',kind,[['meal','Balanced meal'],['shake','Drinkable shake'],['cheap','Cheapest possible'],['low-volume','Low volume'],['school','Portable'],['fridge','Use my ingredients']])}
     ${selectField('speed','Time available','fast',[['fast','Under 10 minutes'],['normal','Up to 25 minutes'],['prep','Meal prep is okay']])}
-    ${areaField('ingredients','Ingredients available',kind==='fridge'?'':'','Leave blank and BulkMind will choose')}
+    ${areaField('ingredients','Ingredients available',kind==='fridge'?productSummary:'','Leave blank and BulkMind will choose')}
+    ${productSummary?`<div class="card card-pad full"><strong>Saved products available</strong><p class="subtle">${escapeHTML(productSummary)}</p></div>`:''}
     <div class="field full"><label for="request">Anything else?</label><textarea id="request" name="request" placeholder="Example: no protein powder, make it sweet, I need to take it to school"></textarea></div></div>
     <div class="form-actions"><button type="button" class="primary full" data-action="submit-generator">Generate for me</button><p class="privacy-note">${state.settings.geminiKey?'Gemini AI is connected.':'No API key: the smart local generator will be used.'}</p></div></form>`);
 }
@@ -412,7 +442,8 @@ function buildLocalMeal(target,proteinTarget,data){const text=`${data.ingredient
 function normalizeFood(food){for(const k of ['calories','protein','carbs','fat'])food[k]=round(food[k],k==='calories'?0:1);return food}
 async function generateWithGemini(data){
   const p=state.profile,t=getTargets(),g=currentGaps();
-  const prompt=`You are the food engine inside BulkMind. Create ONE realistic ${data.mode==='shake'||data.mode==='low-volume'?'shake':'meal'} for this exact user.\nUser: ${JSON.stringify({age:p.age,height:p.height,currentWeight:p.currentWeight,targetWeight:p.targetWeight,goal:p.goalType,appetite:p.appetite,budget:p.budget,restrictions:p.restrictions,likedFoods:p.likedFoods,dislikedFoods:p.dislikedFoods,schedule:p.schedule})}\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
+  const prompt=`You are the food engine inside BulkMind. Create ONE realistic ${data.mode==='shake'||data.mode==='low-volume'?'shake':'meal'} for this exact user.\nUser: ${JSON.stringify({age:p.age,height:p.height,currentWeight:p.currentWeight,targetWeight:p.targetWeight,goal:p.goalType,appetite:p.appetite,budget:p.budget,restrictions:p.restrictions,likedFoods:p.likedFoods,dislikedFoods:p.dislikedFoods,schedule:p.schedule})}
+Saved scanned products with exact nutrition per 100 g/ml: ${JSON.stringify((state.products||[]).map(x=>({name:x.name,brand:x.brand,unit:x.unit,defaultAmount:x.defaultAmount,per100:x.per100,barcode:x.barcode})).slice(0,20))}. If the user mentions milk, protein powder, skyr, yogurt, etc. and a saved product matches, use that product name and its exact macros in the ingredient list.\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
   const json=await geminiRequest(prompt,true);const food=typeof json==='string'?JSON.parse(stripJSON(json)):json;return normalizeFood({id:uid(),type:data.mode==='shake'||data.mode==='low-volume'?'shake':'meal',source:'gemini',...food});
 }
 function stripJSON(text){return String(text).replace(/^```json\s*/i,'').replace(/```$/,'').trim()}
@@ -429,6 +460,124 @@ function localCoachAnswer(q,food){const s=q.toLowerCase(),g=currentGaps();if(foo
 
 function lazyLog(){const text=$('#lazyLogText')?.value.trim();if(!text){toast('Write what you ate first');return}const estimate=estimateTextFood(text);openSheet('Confirm estimate','Lazy log',`<div class="food-card card"><h3>${escapeHTML(estimate.name)}</h3><div class="food-macros"><div><strong>${estimate.calories}</strong><span>kcal</span></div><div><strong>${estimate.protein}g</strong><span>protein</span></div><div><strong>${estimate.carbs}g</strong><span>carbs</span></div><div><strong>${estimate.fat}g</strong><span>fat</span></div></div><p class="subtle">This is a rough estimate. Edit it manually if the portion was very different.</p><div class="food-actions"><button class="primary" data-action="add-food" data-id="${estimate.id}">Add estimate</button><button class="secondary" data-action="manual-log">Edit numbers</button></div></div>`);state.generatedFoods.unshift(estimate);saveState()}
 function estimateTextFood(text){const s=text.toLowerCase();let calories=0,protein=0,carbs=0,fat=0;const rules=[[/egg/g,78,6,1,5],[/toast|bread/g,95,4,17,1],[/milk/g,150,8,12,8],[/chicken/g,250,40,5,7],[/rice/g,260,5,56,1],[/wrap/g,350,20,38,13],[/banana/g,105,1,27,0],[/oat/g,300,10,50,6],[/peanut butter/g,180,8,6,15],[/yogurt|skyr/g,150,18,10,3],[/pasta/g,350,12,70,5],[/cheese/g,120,7,1,10]];for(const [re,k,p,c,f] of rules){const matches=s.match(re);if(matches){calories+=k*matches.length;protein+=p*matches.length;carbs+=c*matches.length;fat+=f*matches.length}}if(!calories){calories=500;protein=20;carbs=60;fat=18}return{id:uid(),type:'meal',source:'local',name:`Estimate: ${text.slice(0,42)}`,summary:'Rough lazy-log estimate',calories,protein,carbs,fat,ingredients:[text],instructions:[],timing:'Logged meal'}}
+
+function productLibrarySummary(limit=8){
+  const products=(state.products||[]).slice(0,limit);
+  if(!products.length) return '';
+  return products.map(p=>`${p.name}${p.brand?` (${p.brand})`:''}: ${round(p.per100.calories)} kcal, ${round(p.per100.protein,1)}g protein, ${round(p.per100.carbs,1)}g carbs, ${round(p.per100.fat,1)}g fat per 100${p.unit||'g'}`).join('; ');
+}
+function productCardHTML(product){
+  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(product.name)}</strong><span>${escapeHTML(product.brand || product.source || 'Saved product')}</span></div><span class="pill good">${escapeHTML(product.unit||'g')}</span></div><div class="food-macros"><div><strong>${round(product.per100.calories)}</strong><span>kcal /100${escapeHTML(product.unit||'g')}</span></div><div><strong>${round(product.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(product.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(product.per100.fat,1)}g</strong><span>fat</span></div></div><div class="food-actions"><button class="primary" data-action="review-product" data-id="${product.id}">Add portion</button><button class="secondary" data-action="delete-product" data-id="${product.id}">Remove</button></div></article>`;
+}
+function openScanHub(){
+  openSheet('Add real product','Barcode, API or label scan',`<div class="stack">
+    <div class="card card-pad"><h3>Best flow</h3><p class="subtle">For milk, protein powder and packaged foods: scan/enter the barcode first. If it is missing or wrong, take a photo of the nutrition label and Gemini will extract it.</p></div>
+    <div class="quick-grid tight"><button class="quick-action" data-action="start-camera-scan"><span class="icon">📷</span><strong>Camera barcode</strong><small>Works only if browser supports it</small></button><button class="quick-action" data-action="manual-barcode"><span class="icon">▣</span><strong>Enter barcode</strong><small>Open Food Facts lookup</small></button><button class="quick-action" data-action="scan-label"><span class="icon">🧾</span><strong>Photo label</strong><small>Gemini reads nutrition</small></button><button class="quick-action" data-action="manual-product"><span class="icon">✎</span><strong>Add manually</strong><small>Fallback for anything</small></button></div>
+    <p class="privacy-note">Barcodes use Open Food Facts. Label photos are sent to Gemini only when you choose that option and have an API key saved.</p>
+  </div>`);
+}
+function openManualBarcode(){
+  openSheet('Barcode lookup','Open Food Facts API',`<form id="barcodeForm" class="sheet-form"><div class="card card-pad"><p class="subtle">Use the EAN/UPC barcode number under the black lines. QR codes usually just open brand websites, but normal food barcodes are what nutrition databases use.</p></div>${field('barcode','Barcode number','text','','Example: 5711953001234')}<div class="form-actions"><button type="button" class="primary full" data-action="lookup-barcode">Find product</button></div></form>`);
+}
+async function lookupBarcodeFromForm(){
+  const code=String($('#barcode')?.value||'').replace(/\D/g,'');
+  if(!code || code.length<6){toast('Enter a valid barcode');return}
+  openSheet('Searching product','Open Food Facts',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Looking up barcode ${escapeHTML(code)}…</p></div></div>`);
+  try{ const product=await fetchOpenFoodFacts(code); reviewProduct(product,'Found in Open Food Facts'); }
+  catch(err){ console.warn(err); openSheet('Product not found','Add another way',`<div class="card card-pad"><h3>Could not find that barcode</h3><p class="subtle">Try a nutrition label photo with Gemini, or add the numbers manually from the back of the product.</p></div><div class="quick-grid tight"><button class="quick-action" data-action="scan-label"><span class="icon">🧾</span><strong>Photo label</strong><small>Use Gemini OCR</small></button><button class="quick-action" data-action="manual-product"><span class="icon">✎</span><strong>Add manually</strong><small>Type per 100g/ml</small></button></div>`); }
+}
+async function fetchOpenFoodFacts(barcode){
+  const url=`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=product_name,brands,nutriments,quantity,serving_size,categories,code`;
+  const res=await fetch(url,{headers:{'Accept':'application/json'}});
+  if(!res.ok) throw new Error('Product API failed');
+  const data=await res.json();
+  if(data.status!==1 || !data.product) throw new Error('Product not found');
+  return productFromOpenFoodFacts(data.product,barcode);
+}
+function productFromOpenFoodFacts(raw,barcode){
+  const n=raw.nutriments||{};
+  const name=raw.product_name||`Barcode ${barcode}`;
+  const unit=inferProductUnit(`${name} ${raw.categories||''} ${raw.quantity||''}`);
+  const product={id:uid(),type:'product',source:'openfoodfacts',name,brand:raw.brands||'',barcode,unit,defaultAmount:inferDefaultAmount(name,unit),per100:{
+    calories:Number(n['energy-kcal_100g'] ?? n['energy-kcal'] ?? 0),
+    protein:Number(n['proteins_100g'] ?? 0),
+    carbs:Number(n['carbohydrates_100g'] ?? 0),
+    fat:Number(n['fat_100g'] ?? 0)
+  }};
+  return sanitizeProduct(product);
+}
+function inferProductUnit(text=''){text=String(text).toLowerCase();return /(milk|mælk|drink|juice|soda|water|ml|liter|litre|shake|kakao)/.test(text)?'ml':'g'}
+function inferDefaultAmount(name='',unit='g'){const s=String(name).toLowerCase();if(/protein|whey|pulver|powder/.test(s))return 30;if(unit==='ml')return 250;if(/skyr|yogurt|yoghurt|kvark/.test(s))return 200;return 100}
+function sanitizeProduct(p){
+  p.name=String(p.name||'Saved product').trim(); p.brand=String(p.brand||'').trim(); p.unit=p.unit==='ml'?'ml':'g'; p.defaultAmount=clamp(Number(p.defaultAmount)||inferDefaultAmount(p.name,p.unit),1,2000);
+  p.per100={calories:clamp(Number(p.per100?.calories)||0,0,900),protein:clamp(Number(p.per100?.protein)||0,0,100),carbs:clamp(Number(p.per100?.carbs)||0,0,100),fat:clamp(Number(p.per100?.fat)||0,0,100)};
+  return p;
+}
+function reviewProduct(product,eyebrow='Review product'){
+  pendingProduct=sanitizeProduct(product);
+  openSheet(pendingProduct.name,eyebrow,`<form id="productPortionForm" class="sheet-form"><div class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(pendingProduct.name)}</strong><span>${escapeHTML(pendingProduct.brand || pendingProduct.source)}</span></div><span class="pill good">per 100${escapeHTML(pendingProduct.unit)}</span></div><div class="food-macros"><div><strong>${round(pendingProduct.per100.calories)}</strong><span>kcal</span></div><div><strong>${round(pendingProduct.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(pendingProduct.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(pendingProduct.per100.fat,1)}g</strong><span>fat</span></div></div></div>${field('portionAmount',`Portion (${pendingProduct.unit})`,'number',pendingProduct.defaultAmount,'Example: milk 250 ml, protein powder 30 g')}<div class="food-actions"><button type="button" class="primary" data-action="add-product-portion">Add portion to today</button><button type="button" class="secondary" data-action="save-product-from-review">Save product</button></div></form>`);
+}
+function productPortionFood(product,amount){
+  const factor=Number(amount)/100; const p=sanitizeProduct(product);
+  return {id:uid(),type:'product',source:p.source||'product',name:`${round(amount)}${p.unit} ${p.name}`,summary:`Logged from saved product`,calories:p.per100.calories*factor,protein:p.per100.protein*factor,carbs:p.per100.carbs*factor,fat:p.per100.fat*factor,ingredients:[`${round(amount)} ${p.unit} ${p.name}${p.brand?` (${p.brand})`:''}`],instructions:[],timing:'Logged product'};
+}
+function addProductPortion(id){
+  const product=id?findProduct(id):pendingProduct; if(!product){toast('No product selected');return}
+  const amount=Number($('#portionAmount')?.value || product.defaultAmount || 100); if(!(amount>0)){toast('Enter a portion amount');return}
+  addEntry(normalizeFood(productPortionFood(product,amount))); closeSheet();
+}
+async function saveProductFromReview(){
+  if(!pendingProduct){toast('No product to save');return}
+  state.products ||= [];
+  const key=pendingProduct.barcode || `${pendingProduct.name}|${pendingProduct.brand}`.toLowerCase();
+  const existing=state.products.findIndex(p=>(p.barcode&&p.barcode===pendingProduct.barcode) || (`${p.name}|${p.brand}`.toLowerCase()===key));
+  if(existing>=0) state.products[existing]={...state.products[existing],...pendingProduct}; else state.products.unshift(pendingProduct);
+  state.products=state.products.slice(0,50); await saveState(); toast('Product saved'); render();
+}
+function findProduct(id){return (state.products||[]).find(p=>p.id===id)}
+function reviewSavedProduct(id){const product=findProduct(id); if(product) reviewProduct(product,'Saved product')}
+async function deleteProduct(id){state.products=(state.products||[]).filter(p=>p.id!==id); await saveState(); render(); toast('Product removed')}
+function openManualProduct(){
+  openSheet('Add product manually','Per 100g/ml from label',`<form id="manualProductForm" class="sheet-form"><div class="form-grid">${field('productName','Product name','text','Letmælk / whey / skyr','', 'full')}${field('productBrand','Brand','text','')}${selectField('productUnit','Unit','g',[['g','grams'],['ml','ml']])}${field('defaultAmount','Default portion','number','100')}${field('calories100','Calories per 100','number','')}${field('protein100','Protein per 100','number','')}${field('carbs100','Carbs per 100','number','')}${field('fat100','Fat per 100','number','')}</div><div class="form-actions"><button type="button" class="primary full" data-action="save-product-manual">Save product</button></div></form>`);
+}
+async function saveManualProduct(){
+  const data=Object.fromEntries(new FormData($('#manualProductForm')));
+  const product=sanitizeProduct({id:uid(),type:'product',source:'manual',name:data.productName,brand:data.productBrand,unit:data.productUnit,defaultAmount:data.defaultAmount,per100:{calories:data.calories100,protein:data.protein100,carbs:data.carbs100,fat:data.fat100}});
+  pendingProduct=product; await saveProductFromReview(); reviewProduct(product,'Manual product saved');
+}
+function openLabelScan(){
+  openSheet('Scan nutrition label','Gemini vision OCR',`<div class="stack"><div class="card card-pad"><h3>Take a clear photo of the nutrition table</h3><p class="subtle">Make sure calories, protein, carbs and fat per 100g/ml are visible. This needs your Gemini key.</p></div><input id="labelPhoto" class="input" type="file" accept="image/*" capture="environment"><button class="primary full" data-action="process-label-photo">Extract nutrition</button><button class="secondary full" data-action="manual-product">Type it manually instead</button></div>`);
+}
+async function processLabelPhoto(){
+  const file=$('#labelPhoto')?.files?.[0]; if(!file){toast('Choose a photo first');return} if(!state.settings.geminiKey){toast('Add Gemini key first');return}
+  openSheet('Reading label','Gemini vision',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Extracting nutrition facts from the photo…</p></div></div>`);
+  try{
+    const prompt='Read this nutrition label. Return ONLY JSON: {"name":"product name if visible or generic","brand":"brand if visible or blank","unit":"g or ml","defaultAmount":100,"per100":{"calories":number,"protein":number,"carbs":number,"fat":number},"note":"short uncertainty note"}. Use per 100g or per 100ml values. If the label shows kJ only, convert kcal = kJ / 4.184. If unsure, set the note but still return best numeric estimates.';
+    const ai=await geminiVisionRequest(prompt,file,true);
+    const product=sanitizeProduct({id:uid(),type:'product',source:'gemini-label',name:ai.name||'Scanned product',brand:ai.brand||'',unit:ai.unit||'g',defaultAmount:ai.defaultAmount||100,per100:ai.per100||ai});
+    reviewProduct(product,`Extracted by Gemini${ai.note?` — ${ai.note}`:''}`);
+  } catch(err){console.error(err);openSheet('Could not read label','Try manual',`<div class="card card-pad"><p class="subtle">Gemini could not extract the label clearly. Try a sharper photo or enter the per-100 values manually.</p></div><button class="primary full" data-action="scan-label">Try another photo</button><button class="secondary full" data-action="manual-product">Add manually</button>`)}
+}
+async function geminiVisionRequest(prompt,file,wantJSON=false){
+  const key=state.settings.geminiKey?.trim(); if(!key) throw new Error('No Gemini key');
+  const model=state.settings.geminiModel||'gemini-2.5-flash-lite';
+  const dataUrl=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.onerror=()=>reject(r.error);r.readAsDataURL(file)});
+  const base64=dataUrl.split(',')[1];
+  const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt},{inlineData:{mimeType:file.type||'image/jpeg',data:base64}}]}],generationConfig:{temperature:.15,maxOutputTokens:900,...(wantJSON?{responseMimeType:'application/json'}:{})}})});
+  if(!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+  const body=await res.json(); const text=body.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')?.trim(); if(!text) throw new Error('Empty AI response'); return wantJSON?JSON.parse(stripJSON(text)):text;
+}
+async function startBarcodeCamera(){
+  if(!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia){toast('Camera barcode scan is not supported here. Use Enter barcode.');openManualBarcode();return}
+  openSheet('Camera barcode','Point at the barcode',`<div class="stack"><video id="barcodeVideo" class="camera-preview" autoplay muted playsinline></video><p class="subtle">Hold the barcode steady. If it does not detect, use manual barcode entry.</p><button class="secondary full" data-action="manual-barcode">Enter barcode instead</button></div>`);
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}}); pendingCameraStream=stream; const video=$('#barcodeVideo'); video.srcObject=stream; await video.play();
+    const detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','qr_code']});
+    let active=true; const loop=async()=>{ if(!active || !pendingCameraStream) return; try{ const codes=await detector.detect(video); if(codes.length){ active=false; const value=String(codes[0].rawValue||'').replace(/\D/g,''); stopCameraStream(); if(value) { openManualBarcode(); $('#barcode').value=value; lookupBarcodeFromForm(); return; } toast('That looked like a QR/link, not a food barcode. Use the number under the barcode.'); openManualBarcode(); return; } }catch{} requestAnimationFrame(loop);}; loop();
+  }catch(err){console.warn(err);toast('Camera blocked. Use barcode number.');openManualBarcode()}
+}
+function stopCameraStream(){ if(pendingCameraStream){ pendingCameraStream.getTracks().forEach(t=>t.stop()); pendingCameraStream=null; } }
+
 function openManualLog(){openSheet('Manual food log','Fast exact entry',`<form class="sheet-form" id="manualLogForm">${field('name','Name','text','Meal or snack')}${field('calories','Calories','number','500')}${field('protein','Protein (g)','number','25')}${field('carbs','Carbs (g)','number','60')}${field('fat','Fat (g)','number','18')}<div class="form-actions"><button type="button" class="primary full" data-action="submit-manual-log">Add to today</button></div></form>`)}
 function submitManualLog(){const data=Object.fromEntries(new FormData($('#manualLogForm')));const food={id:uid(),type:'meal',source:'manual',name:data.name||'Manual entry',calories:Number(data.calories),protein:Number(data.protein),carbs:Number(data.carbs),fat:Number(data.fat)};addEntry(food);closeSheet()}
 function openWeightLog(){openSheet('Log weight','Use the same conditions each time',`<form class="sheet-form" id="weightForm">${field('weight','Weight (kg)','number',state.profile.currentWeight,'Morning after bathroom is easiest to compare.')}<div class="form-actions"><button type="button" class="primary full" data-action="submit-weight">Save weight</button></div></form>`)}
@@ -454,11 +603,128 @@ async function submitCheckin(){const data=Object.fromEntries(new FormData($('#ch
 
 function openSettings(){openSheet('Settings','Personal and private',`<div class="stack">
   <div class="card card-pad stack"><div><h3>Gemini AI</h3><p class="subtle">Required for fully custom AI answers. Without it, BulkMind uses its local generator.</p></div>${field('geminiKey','Gemini API key','password',state.settings.geminiKey,'Stored only in this app on this device.','full')}${field('geminiModel','Model','text',state.settings.geminiModel,'Default: gemini-2.5-flash-lite','full')}<button class="primary full" data-action="save-settings">Save AI settings</button></div>
-  <div class="card card-pad stack"><h3>App</h3><button class="secondary full" data-action="toggle-theme">Switch to ${state.settings.theme==='dark'?'light':'dark'} mode</button><button class="secondary full" data-action="edit-profile">Edit profile and targets</button><button class="secondary full" data-action="install-help">Add to iPhone Home Screen</button></div>
+  <div class="card card-pad stack"><h3>App</h3><button class="secondary full" data-action="toggle-theme">Switch to ${state.settings.theme==='dark'?'light':'dark'} mode</button><button class="secondary full" data-action="edit-targets">Nutrition targets</button><button class="secondary full" data-action="edit-profile">Edit profile</button><button class="secondary full" data-action="install-help">Add to iPhone Home Screen</button></div>
   <div class="card card-pad stack"><h3>Your data</h3><button class="secondary full" data-action="export-data">Export backup</button><input id="importFile" type="file" accept="application/json" class="hidden"><button class="secondary full" onclick="document.getElementById('importFile').click()">Import backup</button><button class="danger-button full" data-action="reset-app">Reset app</button></div>
-  <p class="privacy-note">BulkMind v5 · Data stored in IndexedDB on this device.</p></div>`)}
+  <p class="privacy-note">BulkMind v7 · Data stored in IndexedDB on this device.</p></div>`)}
 async function saveSettings(){state.settings.geminiKey=$('#geminiKey')?.value.trim()||'';state.settings.geminiModel=$('#geminiModel')?.value.trim()||'gemini-2.5-flash-lite';await saveState();toast('AI settings saved');closeSheet()}
 async function toggleTheme(){state.settings.theme=state.settings.theme==='dark'?'light':'dark';applyTheme();await saveState();openSettings()}
+
+function targetPreviewHTML(targets, label='Current') {
+  return `<div class="food-macros"><div><strong>${round(targets.calories)}</strong><span>kcal</span></div><div><strong>${round(targets.protein)}g</strong><span>protein</span></div><div><strong>${round(targets.carbs)}g</strong><span>carbs</span></div><div><strong>${round(targets.fat)}g</strong><span>fat</span></div></div><p class="subtle">${label} · estimated maintenance ${round(targets.maintenance)} kcal.</p>`;
+}
+function openTargetEditor(){
+  const p=state.profile; const auto=recommendedTargets(p); const current=getTargets();
+  openSheet('Nutrition targets','Change calories and macros directly',`<form id="targetForm" class="sheet-form stack">
+    <div class="card card-pad stack"><div><h3>Goal planner</h3><p class="subtle">Tell BulkMind your target weight and deadline. Gemini can help explain it, but the app still validates the numbers before applying them.</p></div><button type="button" class="primary full" data-action="open-goal-planner">Plan my bulk from goal</button></div>
+    <div class="card card-pad stack"><div><h3>Recommended for your bulk</h3><p class="subtle">For 60 → 84 kg, start around 3000–3400 kcal depending on deadline and weekly trend. More protein and fat makes it easier than pushing carbs crazy high.</p></div>${targetPreviewHTML(auto,'Auto target')}</div>
+    <div class="card card-pad stack"><h3>Your target mode</h3>${selectField('targetMode','Mode',p.targetMode||'auto',[['auto','Automatic — app calculates it'],['custom','Custom — I choose numbers']])}<p class="subtle">Automatic changes when your weight/profile changes. Custom keeps your exact numbers.</p></div>
+    <div class="form-grid">${field('customCalories','Calories','number',p.customCalories||current.calories,'Example: 3200')}${field('customProtein','Protein (g)','number',p.customProtein||130,'Example: 130')}${field('customCarbs','Carbs (g)','number',p.customCarbs||450,'Example: 450')}${field('customFat','Fat (g)','number',p.customFat||90,'Example: 90')}</div>
+    <div class="card card-pad"><h3>How to judge it</h3><p class="subtle">Log morning weight 3× per week. If your weekly average does not move for 2 weeks, add 150–250 kcal. If it jumps too fast, reduce 150–250 kcal.</p></div>
+    <div class="form-actions"><button type="button" class="primary full" data-action="save-targets">Save targets</button></div>
+  </form>`)
+}
+
+async function saveTargets(){
+  const data=Object.fromEntries(new FormData($('#targetForm')));
+  state.profile=normalizeProfile({...state.profile,...data});
+  await saveState(); closeSheet(); render(); toast(state.profile.targetMode==='custom'?'Custom targets saved':'Automatic targets enabled');
+}
+
+function openGoalPlanner(){
+  const p=state.profile || defaultProfile;
+  openSheet('AI goal planner','Set targets from your deadline',`<form id="goalPlannerForm" class="sheet-form stack">
+    <div class="card card-pad"><h3>Tell me the goal</h3><p class="subtle">Example: 60 kg to 84 kg in 8 months. BulkMind will calculate calories/macros, then Gemini can explain the plan if your key is connected.</p></div>
+    <div class="form-grid">
+      ${field('currentWeight','Current weight (kg)','number',p.currentWeight,'')}
+      ${field('targetWeight','Target weight (kg)','number',p.targetWeight || 84,'')}
+      ${field('months','Deadline (months)','number',p.targetMonths || 8,'Example: 8')}
+      ${selectField('goalStyle','Style','balanced',[['lean','Leanest possible'],['balanced','Balanced bulk'],['aggressive','Aggressive deadline']])}
+      ${selectField('activityLevel','Activity',p.activityLevel,[['low','Mostly sitting'],['moderate','Normal student/work day'],['high','Very active'],['very-high','Physical job + training']])}
+      ${field('trainingDays','Training days/week','number',p.trainingDays,'')}
+    </div>
+    <div class="card card-pad"><h3>What happens after</h3><p class="subtle">It will set your app to Custom targets, update your target weight/deadline, and save the plan. You can change it anytime.</p></div>
+    <div class="form-actions"><button type="button" class="primary full" data-action="calculate-goal-targets">Generate & apply plan</button></div>
+  </form>`)
+}
+
+async function calculateGoalTargets(){
+  const form=$('#goalPlannerForm'); if(!form)return;
+  const data=Object.fromEntries(new FormData(form));
+  openSheet('Planning your bulk','Calculating safe targets',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Using your goal, deadline, activity, training days and saved profile…</p></div></div>`);
+  try{
+    const local=buildGoalPlanLocal(data);
+    let plan=local;
+    if(state.settings.geminiKey){
+      try{ plan=await generateGoalPlanWithGemini(data, local); }
+      catch(err){ console.warn(err); plan={...local, source:'local', note: local.note + ' Gemini was unavailable, so this is the validated local plan.'}; }
+    }
+    pendingGoalPlan=validateGoalPlan(plan, data, local);
+    openSheet('Your bulk targets',pendingGoalPlan.source==='gemini'?'Gemini + safety validation':'Smart local calculation',goalPlanHTML(pendingGoalPlan));
+  }catch(err){console.error(err);toast('Could not create plan')}
+}
+
+function buildGoalPlanLocal(data){
+  const current=clamp(Number(data.currentWeight)||state.profile.currentWeight,30,250);
+  const target=clamp(Number(data.targetWeight)||state.profile.targetWeight,30,300);
+  const months=clamp(Number(data.months)||8,1,36);
+  const diff=round(target-current,1);
+  const weeks=months*4.345;
+  const requiredWeekly=diff/weeks;
+  const goalType=diff>0?'bulk':diff<0?'cut':'maintain';
+  const tempProfile=normalizeProfile({...state.profile,currentWeight:current,targetWeight:target,activityLevel:data.activityLevel||state.profile.activityLevel,trainingDays:data.trainingDays||state.profile.trainingDays,goalType:goalType==='cut'?'cut':'bulk',targetMode:'auto'});
+  const base=calculateTargets(tempProfile);
+  let plannedWeekly=requiredWeekly;
+  let warning='';
+  if(goalType==='bulk'){
+    if(requiredWeekly>0.75){plannedWeekly=0.75;warning=`${target} kg in ${months} months requires about ${round(requiredWeekly,2)} kg/week, which is very aggressive. I set the plan at about 0.75 kg/week and you should expect some fat gain.`}
+    else if(requiredWeekly>0.5){warning=`This deadline needs about ${round(requiredWeekly,2)} kg/week. That is aggressive, so judge it by weekly averages and expect some fat gain.`}
+    else if(requiredWeekly<0.2){plannedWeekly=0.25;warning='Your deadline is relaxed. I set a minimum useful surplus so progress does not stall.'}
+  }
+  if(goalType==='cut') plannedWeekly=Math.max(requiredWeekly,-0.75);
+  const surplus=goalType==='bulk'?plannedWeekly*7700/7:plannedWeekly*7700/7;
+  let calories=Math.round((base.maintenance+surplus)/25)*25;
+  if(goalType==='bulk') calories=clamp(calories,base.maintenance+200,base.maintenance+900);
+  if(goalType==='cut') calories=clamp(calories,1500,base.maintenance-150);
+  const protein=roundTo5(clamp(current*(goalType==='cut'?2.2:2.1),100,190));
+  let fat=roundTo5(clamp(current*(goalType==='bulk'?1.45:0.9),55,115));
+  let carbs=Math.round((calories-protein*4-fat*9)/4);
+  if(carbs>500){fat=roundTo5(Math.min(115,fat+15));carbs=Math.round((calories-protein*4-fat*9)/4)}
+  if(carbs<180){fat=roundTo5(Math.max(55,fat-10));carbs=Math.round((calories-protein*4-fat*9)/4)}
+  const projectedMonths=diff>0?round(diff/Math.max(plannedWeekly,.05)/4.345,1):months;
+  return {source:'local',currentWeight:current,targetWeight:target,months,goalStyle:data.goalStyle||'balanced',maintenance:base.maintenance,calories,protein,carbs:Math.max(120,carbs),fat,weeklyGain:round(plannedWeekly,2),requiredWeekly:round(requiredWeekly,2),projectedMonths,warning,note:`Start here for 14 days, then adjust based on weekly average weight.`,focus:'Hit calories 5/7 days, protein daily, and train consistently.'};
+}
+function roundTo5(n){return Math.round(Number(n)/5)*5}
+async function generateGoalPlanWithGemini(data, local){
+  const prompt=`You are the target planner inside BulkMind. Create a realistic nutrition target for this user. Return JSON only. Do not give medical diagnosis. Validate against the local baseline and avoid extreme targets.\nUser profile: ${JSON.stringify(state.profile)}\nUser goal form: ${JSON.stringify(data)}\nLocal validated baseline: ${JSON.stringify(local)}\nReturn this JSON shape exactly: {"calories":number,"protein":number,"carbs":number,"fat":number,"weeklyGain":number,"warning":"string","note":"string","focus":"string"}. Keep protein in grams/day, carbs grams/day, fat grams/day. For a bulk, calories should be close to local baseline unless you have a clear reason.`;
+  const ai=await geminiRequest(prompt,true);
+  return {...local,...ai,source:'gemini'};
+}
+function validateGoalPlan(plan,data,local){
+  const base=local || buildGoalPlanLocal(data);
+  const maintenance=Number(base.maintenance)||calculateTargets(state.profile).maintenance;
+  const calories=clamp(Number(plan.calories)||base.calories,maintenance-700,maintenance+950);
+  const protein=roundTo5(clamp(Number(plan.protein)||base.protein,90,200));
+  const fat=roundTo5(clamp(Number(plan.fat)||base.fat,50,125));
+  let carbs=Math.round((calories-protein*4-fat*9)/4);
+  if(Number(plan.carbs)>0 && Math.abs(Number(plan.carbs)-carbs)<80) carbs=round(Number(plan.carbs));
+  carbs=clamp(carbs,120,560);
+  return {...base,...plan,calories:round(calories),protein,carbs,fat,weeklyGain:round(clamp(Number(plan.weeklyGain)||base.weeklyGain,-0.8,0.8),2),warning:String(plan.warning||base.warning||''),note:String(plan.note||base.note||''),focus:String(plan.focus||base.focus||''),source:plan.source||base.source};
+}
+function goalPlanHTML(plan){
+  return `<div class="stack">
+    <div class="summary-target card"><p class="eyebrow">Daily target</p><strong>${plan.calories}</strong> <span>kcal</span><div class="macro-grid" style="margin-top:14px"><div class="macro-card card"><strong>${plan.protein}g</strong><span>protein</span></div><div class="macro-card card"><strong>${plan.carbs}g</strong><span>carbs</span></div><div class="macro-card card"><strong>${plan.fat}g</strong><span>fat</span></div></div></div>
+    <div class="card card-pad"><h3>${plan.currentWeight} kg → ${plan.targetWeight} kg in ${plan.months} months</h3><p class="subtle">Needed pace: ${plan.requiredWeekly} kg/week. Planned pace: ${plan.weeklyGain} kg/week. Estimated timeline with this plan: ${plan.projectedMonths} months.</p></div>
+    ${plan.warning?`<div class="card card-pad"><h3>Honest warning</h3><p class="subtle">${escapeHTML(plan.warning)}</p></div>`:''}
+    <div class="card card-pad"><h3>Why this target</h3><p class="subtle">${escapeHTML(plan.note)}</p><p class="subtle"><strong>Focus:</strong> ${escapeHTML(plan.focus)}</p></div>
+    <div class="food-actions"><button class="primary" data-action="apply-goal-targets">Apply to app</button><button class="secondary" data-action="open-goal-planner">Change goal</button></div>
+  </div>`;
+}
+async function applyGoalTargets(){
+  if(!pendingGoalPlan){toast('Generate a plan first');return}
+  state.profile=normalizeProfile({...state.profile,currentWeight:pendingGoalPlan.currentWeight,targetWeight:pendingGoalPlan.targetWeight,targetMonths:pendingGoalPlan.months,targetMode:'custom',customCalories:pendingGoalPlan.calories,customProtein:pendingGoalPlan.protein,customCarbs:pendingGoalPlan.carbs,customFat:pendingGoalPlan.fat,lastGoalPlan:pendingGoalPlan});
+  await saveState(); closeSheet(); render(); toast('AI goal targets applied');
+}
+
 function openProfileEditor(){const p=state.profile;openSheet('Edit profile','Recalculates targets',`<form id="profileForm" class="sheet-form"><div class="form-grid">${field('name','Name','text',p.name)}${field('age','Age','number',p.age)}${field('height','Height','number',p.height)}${field('currentWeight','Current weight','number',p.currentWeight)}${field('targetWeight','Target weight','number',p.targetWeight)}${field('trainingDays','Training days','number',p.trainingDays)}${selectField('goalType','Goal',p.goalType,[['bulk','Bulk'],['lean-bulk','Lean bulk'],['cut','Lose fat'],['strength','Strength'],['maintain','Maintain']])}${selectField('activityLevel','Activity',p.activityLevel,[['low','Low'],['moderate','Moderate'],['high','High'],['very-high','Very high']])}${field('restrictions','Food rules','text',p.restrictions,'','full')}${areaField('likedFoods','Liked foods',p.likedFoods)}${areaField('dislikedFoods','Disliked foods',p.dislikedFoods)}</div><div class="form-actions"><button type="button" class="primary full" id="saveProfileButton">Save profile</button></div></form>`);$('#saveProfileButton').addEventListener('click',async()=>{const data=Object.fromEntries(new FormData($('#profileForm')));state.profile=normalizeProfile({...state.profile,...data});await saveState();closeSheet();render();toast('Profile updated')})}
 function openInstallHelp(){openSheet('Add to Home Screen','iPhone Safari',`<div class="stack"><div class="card card-pad"><h3>1. Open the Vercel link in Safari</h3><p class="subtle">This does not work the same way from an in-app browser.</p></div><div class="card card-pad"><h3>2. Tap Share ↑</h3><p class="subtle">Scroll down and choose “Add to Home Screen”.</p></div><div class="card card-pad"><h3>3. Keep “Open as Web App” enabled</h3><p class="subtle">Then tap Add. BulkMind will launch without Safari controls.</p></div></div>`)}
 function exportData(){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`bulkmind-backup-${todayISO()}.json`;a.click();URL.revokeObjectURL(a.href)}

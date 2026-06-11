@@ -1,4 +1,4 @@
-const VERSION = 'v5.1';
+const VERSION = 'v8';
 const SHELL = `bulkmind-shell-${VERSION}`;
 const RUNTIME = `bulkmind-runtime-${VERSION}`;
 const ASSETS = ['./','./index.html','./styles.css','./app.js','./manifest.json','./icon-192.png','./icon-512.png','./offline.html'];

@@ -1,4 +1,4 @@
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 const LEGACY_KEY = 'bulkmind.v1';
 const DB_NAME = 'bulkmind-db';
 const DB_STORE = 'kv';
@@ -44,6 +44,7 @@ let activeWorkout = null;
 let pendingWorker = null;
 let pendingGoalPlan = null;
 let pendingProduct = null;
+let pendingLabelProductId = null;
 let pendingCameraStream = null;
 
 function openDB() {
@@ -142,8 +143,9 @@ function recalcLog(log) {
 }
 function addEntry(food, date = todayISO()) {
   const log = getLog(date);
-  log.entries.unshift({ id: uid(), at: new Date().toISOString(), name: food.name, type: food.type || 'meal', calories: round(food.calories), protein: round(food.protein), carbs: round(food.carbs), fat: round(food.fat), sourceId: food.id || null });
+  log.entries.unshift({ id: uid(), at: new Date().toISOString(), name: food.name, type: food.type || 'meal', calories: round(food.calories), protein: round(food.protein), carbs: round(food.carbs), fat: round(food.fat), sourceId: food.id || null, productIds: food.usedProducts || [] });
   recalcLog(log);
+  recordProductUsageFromFood(food);
   saveState();
   toast(`${food.name} added`);
   render();
@@ -273,7 +275,7 @@ function foodScreen() {
 }
 function foodGenerateHTML() {
   const {calorieGap,proteinGap}=currentGaps();
-  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><button class="secondary full" data-action="scan-food">Scan milk / protein / label</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
+  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein. Saved products are reused automatically.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><button class="secondary full" data-action="scan-food">Scan product / label</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
     <div class="section-title"><div><p class="eyebrow">Recently generated</p><h3>Ready to reuse</h3></div></div>${recentGeneratedHTML()}`;
 }
 function foodLogHTML() {
@@ -284,14 +286,22 @@ function savedFoodHTML() {
   return `<div class="stack">${state.savedFoods.map(foodCardHTML).join('')}</div>`;
 }
 function productLibraryHTML() {
-  return `<div class="card card-pad stack"><div><h3>Product library</h3><p class="subtle">Save exact milk, protein powder, skyr and other products here. Gemini will use these when making meals and shakes.</p></div><button class="primary full" data-action="scan-food">Add product by scan/API</button></div>${state.products?.length?`<div class="stack">${state.products.map(productCardHTML).join('')}</div>`:`<div class="empty card">No products saved yet. Add your actual milk or protein powder so BulkMind stops guessing.</div>`}`;
+  const products=(state.products||[]).slice().sort(productSort);
+  const missing=products.filter(isProductIncomplete).length;
+  const preferred=products.filter(p=>p.preferredForShakes).length;
+  return `<div class="card card-pad stack"><div><h3>Product Memory</h3><p class="subtle">Scan once, then BulkMind remembers it. Saved milk, protein powder, skyr and cheap products are used automatically when generating shakes and meals.</p></div><div class="product-stats"><div><strong>${products.length}</strong><span>saved</span></div><div><strong>${preferred}</strong><span>preferred</span></div><div><strong>${missing}</strong><span>need label</span></div></div><button class="primary full" data-action="scan-food">Add product by scan/API</button></div>${products.length?`<div class="stack">${products.map(productCardHTML).join('')}</div>`:`<div class="empty card">No products saved yet. Add your actual milk or protein powder so BulkMind stops guessing. After saving, the shake maker can reuse your normal products automatically.</div>`}`;
 }
 function recentGeneratedHTML() {
   const foods=state.generatedFoods.slice(0,5);
   return foods.length?`<div class="stack">${foods.map(foodCardHTML).join('')}</div>`:`<div class="empty card">Your generated meals and shakes will appear here.</div>`;
 }
 function foodCardHTML(food) {
-  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(food.name)}</strong><span>${escapeHTML(food.summary || food.timing || cap(food.type))}</span></div><span class="pill ${food.source==='gemini'?'good':''}">${food.source==='gemini'?'AI':'Smart local'}</span></div><div class="food-macros"><div><strong>${round(food.calories)}</strong><span>kcal</span></div><div><strong>${round(food.protein)}g</strong><span>protein</span></div><div><strong>${round(food.carbs)}g</strong><span>carbs</span></div><div><strong>${round(food.fat)}g</strong><span>fat</span></div></div><details class="ingredients"><summary>Ingredients & steps</summary><ul>${(food.ingredients||[]).map(i=>`<li>${escapeHTML(typeof i==='string'?i:`${i.amount} ${i.item}`)}</li>`).join('')}</ul>${food.instructions?.length?`<ol>${food.instructions.map(s=>`<li>${escapeHTML(s)}</li>`).join('')}</ol>`:''}</details><div class="food-actions"><button class="primary" data-action="add-food" data-id="${food.id}">Add to today</button><button class="secondary" data-action="ask-food" data-id="${food.id}">Ask AI / change it</button></div><div class="row between"><button class="link-button" data-action="save-food" data-id="${food.id}">${state.savedFoods.some(f=>f.id===food.id)?'Saved ✓':'Save for later'}</button><button class="link-button" data-action="delete-generated" data-id="${food.id}">Remove</button></div></article>`;
+  const used=(food.usedProducts||[]).map(id=>findProduct(id)).filter(Boolean);
+  const missing=(food.missingProducts||[]).filter(Boolean);
+  const productLine=used.length?`<div class="used-products"><strong>Using your products</strong>${used.map(p=>`<span>${escapeHTML(p.name)}${p.preferredForShakes?' · preferred':''}</span>`).join('')}</div>`:'';
+  const missingLine=missing.length?`<div class="missing-box"><strong>Needs your product data</strong><p class="subtle">${escapeHTML(missing.join(', '))}. Scan the product or send a nutrition label photo so next shake is exact.</p><button class="secondary full" data-action="scan-food">Add product data</button></div>`:'';
+  const shopping=food.shoppingNote?`<div class="shopping-note"><strong>Shopping note</strong><p>${escapeHTML(food.shoppingNote)}</p></div>`:'';
+  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(food.name)}</strong><span>${escapeHTML(food.summary || food.timing || cap(food.type))}</span></div><span class="pill ${food.source==='gemini'?'good':''}">${food.source==='gemini'?'AI':'Smart local'}</span></div><div class="food-macros"><div><strong>${round(food.calories)}</strong><span>kcal</span></div><div><strong>${round(food.protein)}g</strong><span>protein</span></div><div><strong>${round(food.carbs)}g</strong><span>carbs</span></div><div><strong>${round(food.fat)}g</strong><span>fat</span></div></div>${productLine}${shopping}${missingLine}<details class="ingredients"><summary>Ingredients & steps</summary><ul>${(food.ingredients||[]).map(i=>`<li>${escapeHTML(typeof i==='string'?i:`${i.amount} ${i.item}`)}</li>`).join('')}</ul>${food.instructions?.length?`<ol>${food.instructions.map(s=>`<li>${escapeHTML(s)}</li>`).join('')}</ol>`:''}</details><div class="food-actions"><button class="primary" data-action="add-food" data-id="${food.id}">Add to today</button><button class="secondary" data-action="ask-food" data-id="${food.id}">Ask AI / change it</button></div><div class="row between"><button class="link-button" data-action="save-food" data-id="${food.id}">${state.savedFoods.some(f=>f.id===food.id)?'Saved ✓':'Save for later'}</button><button class="link-button" data-action="delete-generated" data-id="${food.id}">Remove</button></div></article>`;
 }
 
 function trainScreen() {
@@ -352,7 +362,7 @@ async function handleClick(event) {
   const action=button.dataset.action;
   const actions={
     'start-onboarding':()=>startOnboarding(false),'use-demo':useDemo,'onboarding-back':onboardingBack,'onboarding-next':onboardingNext,'cancel-onboarding':cancelOnboarding,
-    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,'scan-food':openScanHub,'manual-barcode':openManualBarcode,'lookup-barcode':lookupBarcodeFromForm,'start-camera-scan':startBarcodeCamera,'scan-label':openLabelScan,'process-label-photo':processLabelPhoto,'manual-product':openManualProduct,'save-product-manual':saveManualProduct,'add-product-portion':()=>addProductPortion(button.dataset.id),'save-product-from-review':saveProductFromReview,'review-product':()=>reviewSavedProduct(button.dataset.id),'delete-product':()=>deleteProduct(button.dataset.id),
+    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,'scan-food':openScanHub,'manual-barcode':openManualBarcode,'lookup-barcode':lookupBarcodeFromForm,'start-camera-scan':startBarcodeCamera,'scan-label':()=>openLabelScan(),'process-label-photo':processLabelPhoto,'manual-product':openManualProduct,'save-product-manual':saveManualProduct,'add-product-portion':()=>addProductPortion(button.dataset.id),'save-product-from-review':saveProductFromReview,'review-product':()=>reviewSavedProduct(button.dataset.id),'delete-product':()=>deleteProduct(button.dataset.id),'prefer-product':()=>togglePreferredProduct(button.dataset.id),'complete-product':()=>completeProductNutrition(button.dataset.id),'ask-product':()=>openProductCoach(button.dataset.id),
     'food-segment':()=>{state.ui.foodSegment=button.dataset.segment;saveState();render()},'preset-generate':()=>openGenerator(button.dataset.preset),'lazy-log':lazyLog,'manual-log':openManualLog,
     'add-food':()=>{const f=findFood(button.dataset.id);if(f){addEntry(f);closeSheet()}},'save-food':()=>saveFood(button.dataset.id),'ask-food':()=>openFoodChat(button.dataset.id),'delete-generated':()=>deleteGenerated(button.dataset.id),
     'generate-workout':generateWorkoutPlan,'toggle-set':()=>toggleSet(button.dataset.ex,button.dataset.set),'finish-workout':finishWorkout,'weekly-checkin':openWeeklyCheckin,'edit-log':openEditLog,
@@ -437,14 +447,47 @@ const INGREDIENTS={
 };
 function generateLocalFood(data){const mode=data.mode||'meal',target=clamp(Number(data.targetCalories)||700,250,1400),proteinTarget=clamp(Number(data.targetProtein)||35,10,100);return mode==='shake'||mode==='low-volume'?buildLocalShake(target,proteinTarget,data):buildLocalMeal(target,proteinTarget,data)}
 function addIngredient(result,key,mult=1){const item=INGREDIENTS[key];const amount=item.step*mult;result.ingredients.push({item:item.name,amount:`${round(amount,amount<10?1:0)} ${item.unit}`});result.calories+=item.kcal*mult;result.protein+=item.p*mult;result.carbs+=item.c*mult;result.fat+=item.f*mult}
-function buildLocalShake(target,proteinTarget,data){const r={id:uid(),type:'shake',source:'local',name:data.mode==='low-volume'?'Low-volume calorie rescue':'Personal bulk shake',summary:`Built near ${target} kcal for your current gap`,calories:0,protein:0,carbs:0,fat:0,ingredients:[],instructions:['Add liquid first, then dry ingredients.','Blend for 40–60 seconds. Add water if it is too thick.'],timing:'After training, after school or before bed'};addIngredient(r,'milk',4);addIngredient(r,'skyr',1);addIngredient(r,'banana',1);while(r.protein<proteinTarget-5&&r.calories<target-120)addIngredient(r,'skyr',1);while(r.calories<target-150)addIngredient(r,'oats',1);while(r.calories<target-60)addIngredient(r,'pb',1);if(r.calories<target-30)addIngredient(r,data.mode==='low-volume'?'oil':'honey',1);normalizeFood(r);r.why=`It targets your remaining calories without forcing another full meal. ${state.profile.appetite==='low'?'Liquid calories should be easier with your low appetite.':''}`;return r}
-function buildLocalMeal(target,proteinTarget,data){const text=`${data.ingredients||''} ${state.profile.likedFoods||''}`.toLowerCase();let template;if(data.mode==='school')template=['bread','chicken','cheese','yogurt'];else if(text.includes('pasta'))template=['pasta','chicken','cheese','oil'];else if(text.includes('egg'))template=['eggs','bread','cheese','milk'];else template=['rice','chicken','eggs','oil'];const r={id:uid(),type:'meal',source:'local',name:data.mode==='cheap'?'Budget power bowl':data.mode==='school'?'Portable protein meal':'Balanced calorie-gap meal',summary:`Fast meal matched near ${target} kcal`,calories:0,protein:0,carbs:0,fat:0,ingredients:[],instructions:['Prepare the main carb and protein.','Combine, season to taste and add the calorie-dense topping last.'],timing:data.mode==='school'?'Pack it for school or work':'Lunch, dinner or post-workout'};for(const key of template)addIngredient(r,key,1);while(r.protein<proteinTarget-4&&r.calories<target-140)addIngredient(r,template.includes('chicken')?'chicken':'eggs',.5);while(r.calories<target-100)addIngredient(r,template.includes('rice')?'rice':template.includes('pasta')?'pasta':'bread',1);if(r.calories<target-35)addIngredient(r,'oil',.5);normalizeFood(r);r.why=`This uses simple foods, keeps preparation low and closes most of your current macro gap.`;return r}
+function buildLocalShake(target,proteinTarget,data){
+  const r={id:uid(),type:'shake',source:'local',name:data.mode==='low-volume'?'Low-volume calorie rescue':'Personal bulk shake',summary:`Built near ${target} kcal for your current gap`,calories:0,protein:0,carbs:0,fat:0,ingredients:[],instructions:['Add liquid first, then dry ingredients.','Blend for 40–60 seconds. Add water if it is too thick.'],timing:'After training, after school or before bed',usedProducts:[],missingProducts:[]};
+  const milk=chooseProduct('milk',{preferShake:true});
+  const yogurt=chooseProduct('skyr-yogurt',{preferShake:true});
+  const protein=chooseProduct('protein-powder',{preferShake:true});
+  const oats=chooseProduct('oats',{preferShake:true});
+  const pb=chooseProduct('peanut-butter',{preferShake:true});
+  if(!addProductIngredient(r,milk,400)){addIngredient(r,'milk',4); if(productsNeedingNutritionFor('milk').length) r.missingProducts.push(...productsNeedingNutritionFor('milk'));}
+  if(protein && proteinTarget>35) addProductIngredient(r,protein,protein.defaultAmount||30);
+  if(!protein && yogurt && proteinTarget>25) addProductIngredient(r,yogurt,200); else if(!protein) addIngredient(r,'skyr',1);
+  addIngredient(r,'banana',1);
+  while(r.protein<proteinTarget-5&&r.calories<target-120){ if(yogurt) addProductIngredient(r,yogurt,150); else addIngredient(r,'skyr',1); }
+  while(r.calories<target-150){ if(oats) addProductIngredient(r,oats,40); else addIngredient(r,'oats',1); }
+  while(r.calories<target-60){ if(pb) addProductIngredient(r,pb,20); else addIngredient(r,'pb',1); }
+  if(r.calories<target-30)addIngredient(r,data.mode==='low-volume'?'oil':'honey',1);
+  r.missingProducts=[...new Set(r.missingProducts)];
+  normalizeFood(r);
+  const usedNames=(r.usedProducts||[]).map(id=>findProduct(id)?.name).filter(Boolean);
+  r.why=`It targets your remaining calories without forcing another full meal. ${usedNames.length?`I used your saved products: ${usedNames.join(', ')}.`:''} ${state.profile.appetite==='low'?'Liquid calories should be easier with your low appetite.':''}`;
+  if(!r.shoppingNote && usedNames.length) r.shoppingNote='I reused the products you normally save/use. Add prices to compare cheaper alternatives automatically.';
+  return r
+}
+function buildLocalMeal(target,proteinTarget,data){
+  const text=`${data.ingredients||''} ${state.profile.likedFoods||''}`.toLowerCase();let template;if(data.mode==='school')template=['bread','chicken','cheese','yogurt'];else if(text.includes('pasta'))template=['pasta','chicken','cheese','oil'];else if(text.includes('egg'))template=['eggs','bread','cheese','milk'];else template=['rice','chicken','eggs','oil'];
+  const r={id:uid(),type:'meal',source:'local',name:data.mode==='cheap'?'Budget power bowl':data.mode==='school'?'Portable protein meal':'Balanced calorie-gap meal',summary:`Fast meal matched near ${target} kcal`,calories:0,protein:0,carbs:0,fat:0,ingredients:[],instructions:['Prepare the main carb and protein.','Combine, season to taste and add the calorie-dense topping last.'],timing:data.mode==='school'?'Pack it for school or work':'Lunch, dinner or post-workout',usedProducts:[],missingProducts:[]};
+  for(const key of template){ const product=chooseProduct(key,{preferShake:false}); if(!addProductIngredient(r,product,product?.defaultAmount||100)) addIngredient(r,key,1); }
+  while(r.protein<proteinTarget-4&&r.calories<target-140){ const key=template.includes('chicken')?'chicken':'eggs'; const product=chooseProduct(key); if(!addProductIngredient(r,product,(product?.defaultAmount||100)/2)) addIngredient(r,key,.5); }
+  while(r.calories<target-100){ const key=template.includes('rice')?'rice':template.includes('pasta')?'pasta':'bread'; const product=chooseProduct(key); if(!addProductIngredient(r,product,product?.defaultAmount||100)) addIngredient(r,key,1); }
+  if(r.calories<target-35)addIngredient(r,'oil',.5);
+  normalizeFood(r);
+  const usedNames=(r.usedProducts||[]).map(id=>findProduct(id)?.name).filter(Boolean);
+  r.why=`This uses simple foods, keeps preparation low and closes most of your current macro gap. ${usedNames.length?`I used your saved product memory: ${usedNames.join(', ')}.`:''}`;
+  if(!r.shoppingNote && usedNames.length) r.shoppingNote='Add prices to saved products and BulkMind can recommend cheaper alternatives when you shop.';
+  return r
+}
 function normalizeFood(food){for(const k of ['calories','protein','carbs','fat'])food[k]=round(food[k],k==='calories'?0:1);return food}
 async function generateWithGemini(data){
   const p=state.profile,t=getTargets(),g=currentGaps();
   const prompt=`You are the food engine inside BulkMind. Create ONE realistic ${data.mode==='shake'||data.mode==='low-volume'?'shake':'meal'} for this exact user.\nUser: ${JSON.stringify({age:p.age,height:p.height,currentWeight:p.currentWeight,targetWeight:p.targetWeight,goal:p.goalType,appetite:p.appetite,budget:p.budget,restrictions:p.restrictions,likedFoods:p.likedFoods,dislikedFoods:p.dislikedFoods,schedule:p.schedule})}
-Saved scanned products with exact nutrition per 100 g/ml: ${JSON.stringify((state.products||[]).map(x=>({name:x.name,brand:x.brand,unit:x.unit,defaultAmount:x.defaultAmount,per100:x.per100,barcode:x.barcode})).slice(0,20))}. If the user mentions milk, protein powder, skyr, yogurt, etc. and a saved product matches, use that product name and its exact macros in the ingredient list.\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
-  const json=await geminiRequest(prompt,true);const food=typeof json==='string'?JSON.parse(stripJSON(json)):json;return normalizeFood({id:uid(),type:data.mode==='shake'||data.mode==='low-volume'?'shake':'meal',source:'gemini',...food});
+Saved product memory with exact nutrition/history: ${JSON.stringify((state.products||[]).slice().sort(productSort).map(x=>({id:x.id,name:x.name,brand:x.brand,category:x.category,unit:x.unit,defaultAmount:x.defaultAmount,per100:x.per100,barcode:x.barcode,preferredForShakes:!!x.preferredForShakes,usageCount:x.usageCount||0,lastUsed:x.lastUsed||null,pricePer100:x.pricePer100||0,incomplete:isProductIncomplete(x)})).slice(0,30))}. Rules for product memory: use preferred/recently-used saved products by default for milk, protein powder, skyr/yogurt, oats and peanut butter. If a matching saved product has incomplete nutrition, do NOT invent exact macros for it; add it to missingProducts and ask the user to scan/send a nutrition label. If a cheaper saved alternative exists in the same category, include it in shoppingNote.\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"usedProducts":["saved product id if used"],"missingProducts":["product/category needing nutrition label"],"shoppingNote":"short note or blank","ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
+  const json=await geminiRequest(prompt,true);const food=typeof json==='string'?JSON.parse(stripJSON(json)):json;const normalized=normalizeFood({id:uid(),type:data.mode==='shake'||data.mode==='low-volume'?'shake':'meal',source:'gemini',...food});normalized.usedProducts=(normalized.usedProducts||[]).filter(id=>findProduct(id));normalized.missingProducts=[...new Set([...(normalized.missingProducts||[]),...productsNeedingNutritionFor(JSON.stringify(normalized.ingredients||[]))])];if(!normalized.shoppingNote&&normalized.usedProducts?.length){const note=normalized.usedProducts.map(id=>betterProductSuggestion(findProduct(id))).filter(Boolean)[0];if(note) normalized.shoppingNote=note;}return normalized;
 }
 function stripJSON(text){return String(text).replace(/^```json\s*/i,'').replace(/```$/,'').trim()}
 async function geminiRequest(prompt,wantJSON=false){const key=state.settings.geminiKey?.trim();if(!key)throw new Error('No Gemini key');const model=state.settings.geminiModel||'gemini-2.5-flash-lite';const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:.55,maxOutputTokens:1200,...(wantJSON?{responseMimeType:'application/json'}:{})}})});if(!res.ok)throw new Error(`Gemini ${res.status}: ${await res.text()}`);const data=await res.json();const text=data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')?.trim();if(!text)throw new Error('Empty AI response');return wantJSON?JSON.parse(stripJSON(text)):text}
@@ -461,13 +504,113 @@ function localCoachAnswer(q,food){const s=q.toLowerCase(),g=currentGaps();if(foo
 function lazyLog(){const text=$('#lazyLogText')?.value.trim();if(!text){toast('Write what you ate first');return}const estimate=estimateTextFood(text);openSheet('Confirm estimate','Lazy log',`<div class="food-card card"><h3>${escapeHTML(estimate.name)}</h3><div class="food-macros"><div><strong>${estimate.calories}</strong><span>kcal</span></div><div><strong>${estimate.protein}g</strong><span>protein</span></div><div><strong>${estimate.carbs}g</strong><span>carbs</span></div><div><strong>${estimate.fat}g</strong><span>fat</span></div></div><p class="subtle">This is a rough estimate. Edit it manually if the portion was very different.</p><div class="food-actions"><button class="primary" data-action="add-food" data-id="${estimate.id}">Add estimate</button><button class="secondary" data-action="manual-log">Edit numbers</button></div></div>`);state.generatedFoods.unshift(estimate);saveState()}
 function estimateTextFood(text){const s=text.toLowerCase();let calories=0,protein=0,carbs=0,fat=0;const rules=[[/egg/g,78,6,1,5],[/toast|bread/g,95,4,17,1],[/milk/g,150,8,12,8],[/chicken/g,250,40,5,7],[/rice/g,260,5,56,1],[/wrap/g,350,20,38,13],[/banana/g,105,1,27,0],[/oat/g,300,10,50,6],[/peanut butter/g,180,8,6,15],[/yogurt|skyr/g,150,18,10,3],[/pasta/g,350,12,70,5],[/cheese/g,120,7,1,10]];for(const [re,k,p,c,f] of rules){const matches=s.match(re);if(matches){calories+=k*matches.length;protein+=p*matches.length;carbs+=c*matches.length;fat+=f*matches.length}}if(!calories){calories=500;protein=20;carbs=60;fat=18}return{id:uid(),type:'meal',source:'local',name:`Estimate: ${text.slice(0,42)}`,summary:'Rough lazy-log estimate',calories,protein,carbs,fat,ingredients:[text],instructions:[],timing:'Logged meal'}}
 
-function productLibrarySummary(limit=8){
-  const products=(state.products||[]).slice(0,limit);
+
+function inferProductCategory(text=''){
+  const s=String(text).toLowerCase();
+  if(/whey|protein|pulver|powder/.test(s)) return 'protein-powder';
+  if(/mælk|milk|kakao|chocolate milk|proteinmælk/.test(s)) return 'milk';
+  if(/skyr|yogurt|yoghurt|kvark|greek/.test(s)) return 'skyr-yogurt';
+  if(/oat|havre|gryn/.test(s)) return 'oats';
+  if(/peanut|jordnød|nøddecreme/.test(s)) return 'peanut-butter';
+  if(/banana|banan/.test(s)) return 'banana';
+  if(/olive|oil|olie/.test(s)) return 'oil';
+  if(/rice|ris/.test(s)) return 'rice';
+  if(/chicken|kylling/.test(s)) return 'chicken';
+  if(/egg|æg/.test(s)) return 'eggs';
+  if(/pasta/.test(s)) return 'pasta';
+  if(/bread|toast|brød|bolle/.test(s)) return 'bread';
+  if(/cheese|ost/.test(s)) return 'cheese';
+  return 'other';
+}
+function productCategoryOptions(){return [['milk','Milk / drink'],['protein-powder','Protein powder'],['skyr-yogurt','Skyr / yogurt'],['oats','Oats'],['peanut-butter','Peanut butter'],['banana','Banana'],['oil','Oil'],['rice','Rice'],['chicken','Chicken'],['eggs','Eggs'],['pasta','Pasta'],['bread','Bread'],['cheese','Cheese'],['other','Other']]}
+function isProductIncomplete(product){
+  const p=product?.per100||{};
+  return !(Number(p.calories)>0) || (Number(p.protein)===0 && Number(p.carbs)===0 && Number(p.fat)===0);
+}
+function pricePer100(product){
+  const price=Number(product.pricePackage||product.price||0), amount=Number(product.packageAmount||0);
+  if(price>0 && amount>0) return price/amount*100;
+  return Number(product.pricePer100)||0;
+}
+function chooseProduct(category,{preferShake=false, allowIncomplete=false}={}){
+  const cats=Array.isArray(category)?category:[category];
+  const matches=(state.products||[]).filter(p=>cats.includes(p.category||inferProductCategory(`${p.name} ${p.brand}`)) && (allowIncomplete || !isProductIncomplete(p)));
+  if(!matches.length) return null;
+  return matches.sort((a,b)=>
+    Number(preferShake&&b.preferredForShakes)-Number(preferShake&&a.preferredForShakes) ||
+    Number(b.usageCount||0)-Number(a.usageCount||0) ||
+    String(b.lastUsed||'').localeCompare(String(a.lastUsed||'')) ||
+    Number(a.pricePer100||9999)-Number(b.pricePer100||9999)
+  )[0];
+}
+function betterProductSuggestion(product){
+  if(!product) return '';
+  const cat=product.category||inferProductCategory(product.name);
+  const currentPrice=pricePer100(product);
+  const alternatives=(state.products||[]).filter(p=>p.id!==product.id && (p.category||inferProductCategory(p.name))===cat && !isProductIncomplete(p) && pricePer100(p)>0);
+  if(currentPrice>0){
+    const cheaper=alternatives.filter(p=>pricePer100(p)<currentPrice*.92).sort((a,b)=>pricePer100(a)-pricePer100(b))[0];
+    if(cheaper) return `Next time you shop, ${cheaper.name} looks cheaper than ${product.name} (${round(pricePer100(cheaper),2)} vs ${round(currentPrice,2)} kr/100${product.unit}).`;
+  }
+  if(!currentPrice) return `Add the price for ${product.name} and BulkMind can compare it against future products when you shop.`;
+  return '';
+}
+function recordProductUsage(productId,{amount=null, context='used'}={}){
+  const p=findProduct(productId); if(!p) return;
+  p.usageCount=Number(p.usageCount||0)+1;
+  p.lastUsed=new Date().toISOString();
+  if(context==='shake') p.shakeUseCount=Number(p.shakeUseCount||0)+1;
+  if(amount) p.lastAmount=amount;
+}
+function recordProductUsageFromFood(food){
+  const ids=new Set(food.usedProducts||[]);
+  const text=JSON.stringify(food.ingredients||[]).toLowerCase();
+  for(const p of state.products||[]) if(text.includes(String(p.name||'').toLowerCase())) ids.add(p.id);
+  ids.forEach(id=>recordProductUsage(id,{context:food.type==='shake'?'shake':'meal'}));
+}
+function addProductIngredient(result, product, amount){
+  if(!product || isProductIncomplete(product)) return false;
+  amount=Number(amount||product.defaultAmount||100);
+  const factor=amount/100;
+  result.ingredients.push({item:product.name,amount:`${round(amount)} ${product.unit||'g'}`,productId:product.id});
+  result.usedProducts ||= [];
+  if(!result.usedProducts.includes(product.id)) result.usedProducts.push(product.id);
+  result.calories += Number(product.per100.calories||0)*factor;
+  result.protein += Number(product.per100.protein||0)*factor;
+  result.carbs += Number(product.per100.carbs||0)*factor;
+  result.fat += Number(product.per100.fat||0)*factor;
+  const note=betterProductSuggestion(product);
+  if(note) result.shoppingNote = result.shoppingNote ? `${result.shoppingNote} ${note}` : note;
+  return true;
+}
+function productsNeedingNutritionFor(text){
+  const s=String(text||'').toLowerCase();
+  return (state.products||[]).filter(p=>isProductIncomplete(p) && (s.includes(String(p.name).toLowerCase()) || s.includes(p.category||''))).map(p=>p.name).slice(0,3);
+}
+function productLibrarySummary(limit=12){
+  const products=(state.products||[]).slice().sort(productSort).slice(0,limit);
   if(!products.length) return '';
-  return products.map(p=>`${p.name}${p.brand?` (${p.brand})`:''}: ${round(p.per100.calories)} kcal, ${round(p.per100.protein,1)}g protein, ${round(p.per100.carbs,1)}g carbs, ${round(p.per100.fat,1)}g fat per 100${p.unit||'g'}`).join('; ');
+  return products.map(p=>{
+    const price=p.pricePer100?`, ${round(p.pricePer100,2)} kr/100${p.unit}`:'';
+    const memory=p.usageCount?`, used ${p.usageCount}×${p.preferredForShakes?' and preferred':''}`:(p.preferredForShakes?', preferred':'');
+    const missing=isProductIncomplete(p)?', nutrition incomplete — ask user for label photo':'';
+    return `${p.name}${p.brand?` (${p.brand})`:''} [${p.category||inferProductCategory(p.name)}]: ${round(p.per100.calories)} kcal, ${round(p.per100.protein,1)}g protein, ${round(p.per100.carbs,1)}g carbs, ${round(p.per100.fat,1)}g fat per 100${p.unit||'g'}${price}${memory}${missing}`;
+  }).join('; ');
+}
+function productSort(a,b){
+  return Number(b.preferredForShakes||0)-Number(a.preferredForShakes||0) || Number(b.usageCount||0)-Number(a.usageCount||0) || String(b.lastUsed||'').localeCompare(String(a.lastUsed||''));
+}
+function productStatusText(p){
+  if(isProductIncomplete(p)) return 'Needs label photo';
+  if(p.preferredForShakes) return 'Used automatically in shakes';
+  if(p.usageCount) return `Used ${p.usageCount}×`;
+  return 'Saved for later';
 }
 function productCardHTML(product){
-  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(product.name)}</strong><span>${escapeHTML(product.brand || product.source || 'Saved product')}</span></div><span class="pill good">${escapeHTML(product.unit||'g')}</span></div><div class="food-macros"><div><strong>${round(product.per100.calories)}</strong><span>kcal /100${escapeHTML(product.unit||'g')}</span></div><div><strong>${round(product.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(product.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(product.per100.fat,1)}g</strong><span>fat</span></div></div><div class="food-actions"><button class="primary" data-action="review-product" data-id="${product.id}">Add portion</button><button class="secondary" data-action="delete-product" data-id="${product.id}">Remove</button></div></article>`;
+  const p=sanitizeProduct({...product});
+  const price=p.pricePer100?`${round(p.pricePer100,2)} kr /100${escapeHTML(p.unit)}`:'Add price to compare';
+  const status=isProductIncomplete(p)?'warn':'good';
+  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(p.name)}</strong><span>${escapeHTML(p.brand || p.source || 'Saved product')}</span></div><span class="pill ${status}">${escapeHTML(productStatusText(p))}</span></div><div class="food-macros"><div><strong>${round(p.per100.calories)}</strong><span>kcal /100${escapeHTML(p.unit||'g')}</span></div><div><strong>${round(p.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(p.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(p.per100.fat,1)}g</strong><span>fat</span></div></div><div class="product-memory"><span>${escapeHTML(cap(p.category||'other'))}</span><span>${escapeHTML(price)}</span><span>${p.lastUsed?`Last used ${escapeHTML(new Date(p.lastUsed).toLocaleDateString())}`:'Not used yet'}</span></div>${isProductIncomplete(p)?`<div class="missing-box"><strong>Nutrition missing</strong><p class="subtle">BulkMind cannot use this properly yet. Send a photo of the nutrition table and it will complete the product.</p><button class="secondary full" data-action="complete-product" data-id="${p.id}">Add nutrition photo</button></div>`:''}<div class="food-actions"><button class="primary" data-action="review-product" data-id="${p.id}">Use / edit</button><button class="secondary" data-action="prefer-product" data-id="${p.id}">${p.preferredForShakes?'Preferred ✓':'Prefer in shakes'}</button></div><div class="row between"><button class="link-button" data-action="ask-product" data-id="${p.id}">Ask AI compare</button><button class="link-button" data-action="delete-product" data-id="${p.id}">Remove</button></div></article>`;
 }
 function openScanHub(){
   openSheet('Add real product','Barcode, API or label scan',`<div class="stack">
@@ -498,7 +641,8 @@ function productFromOpenFoodFacts(raw,barcode){
   const n=raw.nutriments||{};
   const name=raw.product_name||`Barcode ${barcode}`;
   const unit=inferProductUnit(`${name} ${raw.categories||''} ${raw.quantity||''}`);
-  const product={id:uid(),type:'product',source:'openfoodfacts',name,brand:raw.brands||'',barcode,unit,defaultAmount:inferDefaultAmount(name,unit),per100:{
+  const packageAmount=inferPackageAmount(raw.quantity||raw.serving_size||'',unit);
+  const product={id:uid(),type:'product',source:'openfoodfacts',name,brand:raw.brands||'',barcode,unit,category:inferProductCategory(`${name} ${raw.brands||''} ${raw.categories||''}`),defaultAmount:inferDefaultAmount(name,unit),packageAmount,per100:{
     calories:Number(n['energy-kcal_100g'] ?? n['energy-kcal'] ?? 0),
     protein:Number(n['proteins_100g'] ?? 0),
     carbs:Number(n['carbohydrates_100g'] ?? 0),
@@ -506,47 +650,87 @@ function productFromOpenFoodFacts(raw,barcode){
   }};
   return sanitizeProduct(product);
 }
+function inferPackageAmount(text='',unit='g'){
+  const s=String(text).toLowerCase().replace(',', '.');
+  const m=s.match(/(\d+(?:\.\d+)?)\s*(l|liter|litre|ml|kg|g)/);
+  if(!m) return 0; const n=Number(m[1]); const u=m[2];
+  if(u==='l'||u==='liter'||u==='litre') return unit==='ml'?n*1000:n*1000;
+  if(u==='kg') return n*1000; if(u==='ml'||u==='g') return n; return 0;
+}
 function inferProductUnit(text=''){text=String(text).toLowerCase();return /(milk|mælk|drink|juice|soda|water|ml|liter|litre|shake|kakao)/.test(text)?'ml':'g'}
 function inferDefaultAmount(name='',unit='g'){const s=String(name).toLowerCase();if(/protein|whey|pulver|powder/.test(s))return 30;if(unit==='ml')return 250;if(/skyr|yogurt|yoghurt|kvark/.test(s))return 200;return 100}
 function sanitizeProduct(p){
-  p.name=String(p.name||'Saved product').trim(); p.brand=String(p.brand||'').trim(); p.unit=p.unit==='ml'?'ml':'g'; p.defaultAmount=clamp(Number(p.defaultAmount)||inferDefaultAmount(p.name,p.unit),1,2000);
+  p.name=String(p.name||'Saved product').trim(); p.brand=String(p.brand||'').trim(); p.unit=p.unit==='ml'?'ml':'g'; p.category=p.category||inferProductCategory(`${p.name} ${p.brand}`); p.defaultAmount=clamp(Number(p.defaultAmount)||inferDefaultAmount(p.name,p.unit),1,2000);
   p.per100={calories:clamp(Number(p.per100?.calories)||0,0,900),protein:clamp(Number(p.per100?.protein)||0,0,100),carbs:clamp(Number(p.per100?.carbs)||0,0,100),fat:clamp(Number(p.per100?.fat)||0,0,100)};
+  p.packageAmount=clamp(Number(p.packageAmount)||0,0,100000); p.pricePackage=clamp(Number(p.pricePackage)||0,0,100000); p.pricePer100=pricePer100(p); p.usageCount=Number(p.usageCount||0); p.shakeUseCount=Number(p.shakeUseCount||0); p.preferredForShakes=!!p.preferredForShakes; p.lastUsed=p.lastUsed||null; p.notes=String(p.notes||'');
   return p;
 }
 function reviewProduct(product,eyebrow='Review product'){
   pendingProduct=sanitizeProduct(product);
-  openSheet(pendingProduct.name,eyebrow,`<form id="productPortionForm" class="sheet-form"><div class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(pendingProduct.name)}</strong><span>${escapeHTML(pendingProduct.brand || pendingProduct.source)}</span></div><span class="pill good">per 100${escapeHTML(pendingProduct.unit)}</span></div><div class="food-macros"><div><strong>${round(pendingProduct.per100.calories)}</strong><span>kcal</span></div><div><strong>${round(pendingProduct.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(pendingProduct.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(pendingProduct.per100.fat,1)}g</strong><span>fat</span></div></div></div>${field('portionAmount',`Portion (${pendingProduct.unit})`,'number',pendingProduct.defaultAmount,'Example: milk 250 ml, protein powder 30 g')}<div class="food-actions"><button type="button" class="primary" data-action="add-product-portion">Add portion to today</button><button type="button" class="secondary" data-action="save-product-from-review">Save product</button></div></form>`);
+  const missing=isProductIncomplete(pendingProduct);
+  openSheet(pendingProduct.name,eyebrow,`<form id="productPortionForm" class="sheet-form"><div class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(pendingProduct.name)}</strong><span>${escapeHTML(pendingProduct.brand || pendingProduct.source)}</span></div><span class="pill ${missing?'warn':'good'}">${missing?'needs nutrition':`per 100${escapeHTML(pendingProduct.unit)}`}</span></div><div class="food-macros"><div><strong>${round(pendingProduct.per100.calories)}</strong><span>kcal</span></div><div><strong>${round(pendingProduct.per100.protein,1)}g</strong><span>protein</span></div><div><strong>${round(pendingProduct.per100.carbs,1)}g</strong><span>carbs</span></div><div><strong>${round(pendingProduct.per100.fat,1)}g</strong><span>fat</span></div></div></div>${missing?`<div class="missing-box"><strong>I need the nutrition table</strong><p class="subtle">This product can be saved now, but BulkMind will not use it accurately in shakes until calories/protein/carbs/fat are added.</p><button type="button" class="secondary full" data-action="scan-label">Send label photo</button></div>`:''}<div class="form-grid">${field('portionAmount',`Portion (${pendingProduct.unit})`,'number',pendingProduct.defaultAmount,'Example: milk 250 ml, protein powder 30 g')}${selectField('productCategory','Category',pendingProduct.category||'other',productCategoryOptions())}${field('pricePackage','Price paid (kr)','number',pendingProduct.pricePackage||'','Optional, used for cheaper shopping suggestions')}${field('packageAmount',`Package size (${pendingProduct.unit})`,'number',pendingProduct.packageAmount||'','Example: 1000 ml or 900 g')}<label class="check-row full"><input type="checkbox" id="preferredForShakes" name="preferredForShakes" ${pendingProduct.preferredForShakes?'checked':''}> <span>Use this automatically in my bulk shakes when it fits</span></label>${areaField('productNotes','Notes',pendingProduct.notes||'','Example: tastes good, too expensive, bought in Netto')}</div><div class="food-actions"><button type="button" class="primary" data-action="save-product-from-review">Save to Product Memory</button><button type="button" class="secondary" data-action="add-product-portion">Add portion to today</button></div></form>`);
 }
 function productPortionFood(product,amount){
   const factor=Number(amount)/100; const p=sanitizeProduct(product);
-  return {id:uid(),type:'product',source:p.source||'product',name:`${round(amount)}${p.unit} ${p.name}`,summary:`Logged from saved product`,calories:p.per100.calories*factor,protein:p.per100.protein*factor,carbs:p.per100.carbs*factor,fat:p.per100.fat*factor,ingredients:[`${round(amount)} ${p.unit} ${p.name}${p.brand?` (${p.brand})`:''}`],instructions:[],timing:'Logged product'};
+  return {id:uid(),type:'product',source:p.source||'product',name:`${round(amount)}${p.unit} ${p.name}`,summary:`Logged from saved product`,calories:p.per100.calories*factor,protein:p.per100.protein*factor,carbs:p.per100.carbs*factor,fat:p.per100.fat*factor,usedProducts:p.id?[p.id]:[],ingredients:[`${round(amount)} ${p.unit} ${p.name}${p.brand?` (${p.brand})`:''}`],instructions:[],timing:'Logged product'};
+}
+function updatePendingProductFromReviewForm(){
+  if(!pendingProduct) return null;
+  const form=$('#productPortionForm'); if(!form) return pendingProduct;
+  const data=Object.fromEntries(new FormData(form));
+  pendingProduct.category=data.productCategory || pendingProduct.category || inferProductCategory(pendingProduct.name);
+  pendingProduct.pricePackage=Number(data.pricePackage)||0;
+  pendingProduct.packageAmount=Number(data.packageAmount)||0;
+  pendingProduct.pricePer100=pricePer100(pendingProduct);
+  pendingProduct.preferredForShakes=!!$('#preferredForShakes')?.checked;
+  pendingProduct.notes=data.productNotes || '';
+  pendingProduct.defaultAmount=Number(data.portionAmount)||pendingProduct.defaultAmount;
+  return sanitizeProduct(pendingProduct);
 }
 function addProductPortion(id){
-  const product=id?findProduct(id):pendingProduct; if(!product){toast('No product selected');return}
+  let product=id?findProduct(id):updatePendingProductFromReviewForm(); if(!product){toast('No product selected');return}
   const amount=Number($('#portionAmount')?.value || product.defaultAmount || 100); if(!(amount>0)){toast('Enter a portion amount');return}
   addEntry(normalizeFood(productPortionFood(product,amount))); closeSheet();
 }
 async function saveProductFromReview(){
   if(!pendingProduct){toast('No product to save');return}
+  pendingProduct=updatePendingProductFromReviewForm() || sanitizeProduct(pendingProduct);
   state.products ||= [];
   const key=pendingProduct.barcode || `${pendingProduct.name}|${pendingProduct.brand}`.toLowerCase();
-  const existing=state.products.findIndex(p=>(p.barcode&&p.barcode===pendingProduct.barcode) || (`${p.name}|${p.brand}`.toLowerCase()===key));
-  if(existing>=0) state.products[existing]={...state.products[existing],...pendingProduct}; else state.products.unshift(pendingProduct);
-  state.products=state.products.slice(0,50); await saveState(); toast('Product saved'); render();
+  const existing=state.products.findIndex(p=>(p.barcode&&p.barcode===pendingProduct.barcode) || (`${p.name}|${p.brand}`.toLowerCase()===key) || (pendingProduct.id&&p.id===pendingProduct.id));
+  if(existing>=0) state.products[existing]=sanitizeProduct({...state.products[existing],...pendingProduct,id:state.products[existing].id}); else state.products.unshift(sanitizeProduct(pendingProduct));
+  state.products=state.products.slice(0,80); await saveState(); toast(isProductIncomplete(pendingProduct)?'Product saved — add nutrition when ready':'Product saved to memory'); render();
 }
 function findProduct(id){return (state.products||[]).find(p=>p.id===id)}
 function reviewSavedProduct(id){const product=findProduct(id); if(product) reviewProduct(product,'Saved product')}
 async function deleteProduct(id){state.products=(state.products||[]).filter(p=>p.id!==id); await saveState(); render(); toast('Product removed')}
+async function togglePreferredProduct(id){
+  const product=findProduct(id); if(!product) return;
+  product.preferredForShakes=!product.preferredForShakes; product.category=product.category||inferProductCategory(product.name);
+  await saveState(); render(); toast(product.preferredForShakes?'Will use it in shakes':'Preference removed');
+}
+function completeProductNutrition(id){
+  const product=findProduct(id); if(!product){toast('Product not found');return}
+  pendingProduct=sanitizeProduct({...product}); pendingLabelProductId=product.id; openLabelScan(product.id);
+}
+function openProductCoach(id){
+  const product=findProduct(id); if(!product) return;
+  const same=(state.products||[]).filter(p=>p.id!==id && (p.category||inferProductCategory(p.name))===(product.category||inferProductCategory(product.name)));
+  const question=`Compare this product for my bulk and tell me if I should keep using it in shakes or buy a cheaper/better alternative next time. Product: ${JSON.stringify(product)}. Same-category saved products: ${JSON.stringify(same)}.`;
+  openCoach(question);
+}
 function openManualProduct(){
-  openSheet('Add product manually','Per 100g/ml from label',`<form id="manualProductForm" class="sheet-form"><div class="form-grid">${field('productName','Product name','text','Letmælk / whey / skyr','', 'full')}${field('productBrand','Brand','text','')}${selectField('productUnit','Unit','g',[['g','grams'],['ml','ml']])}${field('defaultAmount','Default portion','number','100')}${field('calories100','Calories per 100','number','')}${field('protein100','Protein per 100','number','')}${field('carbs100','Carbs per 100','number','')}${field('fat100','Fat per 100','number','')}</div><div class="form-actions"><button type="button" class="primary full" data-action="save-product-manual">Save product</button></div></form>`);
+  openSheet('Add product manually','Per 100g/ml from label',`<form id="manualProductForm" class="sheet-form"><div class="form-grid">${field('productName','Product name','text',pendingProduct?.name||'Letmælk / whey / skyr','', 'full')}${field('productBrand','Brand','text',pendingProduct?.brand||'')}${selectField('productUnit','Unit',pendingProduct?.unit||'g',[['g','grams'],['ml','ml']])}${selectField('productCategory','Category',pendingProduct?.category||'other',productCategoryOptions())}${field('defaultAmount','Default portion','number',pendingProduct?.defaultAmount||'100')}${field('pricePackage','Price paid (kr)','number',pendingProduct?.pricePackage||'')}${field('packageAmount','Package size','number',pendingProduct?.packageAmount||'')}${field('calories100','Calories per 100','number',pendingProduct?.per100?.calories||'')}${field('protein100','Protein per 100','number',pendingProduct?.per100?.protein||'')}${field('carbs100','Carbs per 100','number',pendingProduct?.per100?.carbs||'')}${field('fat100','Fat per 100','number',pendingProduct?.per100?.fat||'')}</div><label class="check-row"><input type="checkbox" id="manualPreferred" ${pendingProduct?.preferredForShakes?'checked':''}> <span>Use automatically in bulk shakes</span></label><div class="form-actions"><button type="button" class="primary full" data-action="save-product-manual">Save product</button></div></form>`);
 }
 async function saveManualProduct(){
   const data=Object.fromEntries(new FormData($('#manualProductForm')));
-  const product=sanitizeProduct({id:uid(),type:'product',source:'manual',name:data.productName,brand:data.productBrand,unit:data.productUnit,defaultAmount:data.defaultAmount,per100:{calories:data.calories100,protein:data.protein100,carbs:data.carbs100,fat:data.fat100}});
+  const product=sanitizeProduct({id:pendingProduct?.id||uid(),type:'product',source:'manual',name:data.productName,brand:data.productBrand,unit:data.productUnit,category:data.productCategory,defaultAmount:data.defaultAmount,pricePackage:data.pricePackage,packageAmount:data.packageAmount,preferredForShakes:!!$('#manualPreferred')?.checked,per100:{calories:data.calories100,protein:data.protein100,carbs:data.carbs100,fat:data.fat100}});
   pendingProduct=product; await saveProductFromReview(); reviewProduct(product,'Manual product saved');
 }
-function openLabelScan(){
-  openSheet('Scan nutrition label','Gemini vision OCR',`<div class="stack"><div class="card card-pad"><h3>Take a clear photo of the nutrition table</h3><p class="subtle">Make sure calories, protein, carbs and fat per 100g/ml are visible. This needs your Gemini key.</p></div><input id="labelPhoto" class="input" type="file" accept="image/*" capture="environment"><button class="primary full" data-action="process-label-photo">Extract nutrition</button><button class="secondary full" data-action="manual-product">Type it manually instead</button></div>`);
+function openLabelScan(productId=null){
+  if(productId) pendingLabelProductId=productId;
+  const product=pendingLabelProductId?findProduct(pendingLabelProductId):pendingProduct;
+  openSheet('Scan nutrition label','Gemini vision OCR',`<div class="stack"><div class="card card-pad"><h3>${product?`Complete ${escapeHTML(product.name)}`:'Take a clear photo of the nutrition table'}</h3><p class="subtle">Make sure calories, protein, carbs and fat per 100g/ml are visible. This needs your Gemini key. If the barcode/API was missing data, this completes the saved product so it can be used automatically later.</p></div><input id="labelPhoto" class="input" type="file" accept="image/*" capture="environment"><button class="primary full" data-action="process-label-photo">Extract nutrition</button><button class="secondary full" data-action="manual-product">Type it manually instead</button></div>`);
 }
 async function processLabelPhoto(){
   const file=$('#labelPhoto')?.files?.[0]; if(!file){toast('Choose a photo first');return} if(!state.settings.geminiKey){toast('Add Gemini key first');return}
@@ -554,7 +738,9 @@ async function processLabelPhoto(){
   try{
     const prompt='Read this nutrition label. Return ONLY JSON: {"name":"product name if visible or generic","brand":"brand if visible or blank","unit":"g or ml","defaultAmount":100,"per100":{"calories":number,"protein":number,"carbs":number,"fat":number},"note":"short uncertainty note"}. Use per 100g or per 100ml values. If the label shows kJ only, convert kcal = kJ / 4.184. If unsure, set the note but still return best numeric estimates.';
     const ai=await geminiVisionRequest(prompt,file,true);
-    const product=sanitizeProduct({id:uid(),type:'product',source:'gemini-label',name:ai.name||'Scanned product',brand:ai.brand||'',unit:ai.unit||'g',defaultAmount:ai.defaultAmount||100,per100:ai.per100||ai});
+    const base=pendingLabelProductId?findProduct(pendingLabelProductId):(pendingProduct||{});
+    const product=sanitizeProduct({...base,id:base.id||uid(),type:'product',source:base.source?`${base.source}+gemini-label`:'gemini-label',name:base.name||ai.name||'Scanned product',brand:base.brand||ai.brand||'',unit:ai.unit||base.unit||'g',defaultAmount:ai.defaultAmount||base.defaultAmount||100,per100:ai.per100||ai});
+    pendingLabelProductId=null;
     reviewProduct(product,`Extracted by Gemini${ai.note?` — ${ai.note}`:''}`);
   } catch(err){console.error(err);openSheet('Could not read label','Try manual',`<div class="card card-pad"><p class="subtle">Gemini could not extract the label clearly. Try a sharper photo or enter the per-100 values manually.</p></div><button class="primary full" data-action="scan-label">Try another photo</button><button class="secondary full" data-action="manual-product">Add manually</button>`)}
 }
@@ -605,7 +791,7 @@ function openSettings(){openSheet('Settings','Personal and private',`<div class=
   <div class="card card-pad stack"><div><h3>Gemini AI</h3><p class="subtle">Required for fully custom AI answers. Without it, BulkMind uses its local generator.</p></div>${field('geminiKey','Gemini API key','password',state.settings.geminiKey,'Stored only in this app on this device.','full')}${field('geminiModel','Model','text',state.settings.geminiModel,'Default: gemini-2.5-flash-lite','full')}<button class="primary full" data-action="save-settings">Save AI settings</button></div>
   <div class="card card-pad stack"><h3>App</h3><button class="secondary full" data-action="toggle-theme">Switch to ${state.settings.theme==='dark'?'light':'dark'} mode</button><button class="secondary full" data-action="edit-targets">Nutrition targets</button><button class="secondary full" data-action="edit-profile">Edit profile</button><button class="secondary full" data-action="install-help">Add to iPhone Home Screen</button></div>
   <div class="card card-pad stack"><h3>Your data</h3><button class="secondary full" data-action="export-data">Export backup</button><input id="importFile" type="file" accept="application/json" class="hidden"><button class="secondary full" onclick="document.getElementById('importFile').click()">Import backup</button><button class="danger-button full" data-action="reset-app">Reset app</button></div>
-  <p class="privacy-note">BulkMind v7 · Data stored in IndexedDB on this device.</p></div>`)}
+  <p class="privacy-note">BulkMind v9 · Data stored in IndexedDB on this device.</p></div>`)}
 async function saveSettings(){state.settings.geminiKey=$('#geminiKey')?.value.trim()||'';state.settings.geminiModel=$('#geminiModel')?.value.trim()||'gemini-2.5-flash-lite';await saveState();toast('AI settings saved');closeSheet()}
 async function toggleTheme(){state.settings.theme=state.settings.theme==='dark'?'light':'dark';applyTheme();await saveState();openSettings()}
 

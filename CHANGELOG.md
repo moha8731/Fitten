@@ -1,41 +1,19 @@
-# BulkMind v8 — exact product scanning
+# BulkMind v9 — Product Memory automation
 
-- Added Product Library for real milk, protein powder, skyr and other packaged foods.
-- Added Open Food Facts barcode/API lookup.
-- Added manual barcode entry fallback for iPhone browsers.
-- Added optional camera barcode scanning when the browser supports BarcodeDetector.
-- Added Gemini vision nutrition-label extraction from a photo.
-- Added manual product entry for per-100g/ml labels.
-- Generated meals and shakes now send saved scanned product macros to Gemini, so “milk” can mean your actual milk.
-- Added portion logging from saved products.
+This version turns product scanning into a real memory system instead of a dead-end scan screen.
 
-# BulkMind v7 — AI goal planner
+## New
+- Product Memory dashboard with saved/preferred/missing-nutrition counters.
+- Saved products now store category, default portion, price, package size, usage count, last used time, and whether they should be preferred in shakes.
+- Generated shakes/meals can now reuse saved products automatically.
+- Local generator now uses your saved milk, protein powder, skyr/yogurt, oats, peanut butter and other product categories when available.
+- Gemini prompt now receives product history and is instructed to use preferred/recent products.
+- Generated cards show "Using your products" when product memory was used.
+- Generated cards can show a shopping note when a cheaper saved alternative exists or when price data is needed.
+- If a saved/scanned product is missing nutrition, BulkMind asks for a nutrition label photo instead of guessing exact macros.
+- Product cards now include "Prefer in shakes", "Ask AI compare", "Add nutrition photo", and "Use / edit".
+- Manual product entry now supports category, price, package size and preferred-in-shakes.
 
-- Replaced six crowded tabs with four clear sections: Today, Food, Train, Progress.
-- Added a universal quick-add button.
-- Reduced onboarding from six stages to three and autosaves progress.
-- Added keyboard-aware iPhone layout using the Visual Viewport API.
-- Added exact custom meal/shake generation with Gemini or an adaptive local fallback.
-- Added “Ask AI / change it” directly on generated items.
-- Added lazy logging, manual macro logging, editable daily log, saved foods, and one-tap reuse.
-- Added usable workout logging with set completion.
-- Added weight chart, consistency map, and weekly check-in.
-- Moved core data to IndexedDB and attempts migration from old BulkMind localStorage data.
-- Rebuilt the service worker with versioned caches and update notification.
-- Removed duplicate JavaScript definitions and reduced the app script substantially.
-
-
-## v6
-- Added direct Nutrition Targets editor for calories/protein/carbs/fat.
-- Added automatic vs custom target mode.
-- Fixed shake generator so it suggests a realistic portion instead of a full-day shake when nothing is logged.
-- Updated cache version to v6.
-
-
-## v7
-- Added AI Goal Planner inside Nutrition targets.
-- User can enter current weight, target weight and deadline, e.g. 60 kg to 84 kg in 8 months.
-- Uses Gemini when a Gemini API key is connected, then validates the numbers before applying them.
-- Applies calories/protein/carbs/fat automatically as custom targets.
-- Adds honest warning when a deadline requires aggressive weekly gain.
-- Saves targetMonths and lastGoalPlan in the user profile.
+## Notes
+- Price comparison works between products you have saved. BulkMind does not search live supermarket prices.
+- Open Food Facts data can be incomplete, so always review scanned products before saving.

@@ -1,4 +1,4 @@
-const VERSION = 'v18-truthful-planner';
+const VERSION = 'v20-decision-engine';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
@@ -41,7 +41,7 @@ const defaults = {
   useSearch: true,
   profile: {
     name: '', age: 18, sex: 'male', height: 175, weight: 60, targetWeight: 84, months: 8,
-    activity: 'moderate', trainingDays: 3, goalStyle: 'balanced', appetite: 'low', store: 'Netto', budget: 300,
+    activity: 'moderate', trainingDays: 3, goalStyle: 'balanced', appetite: 'low', store: 'Netto', sallingStoreId: '', budget: 300,
     people: 1, units: 'metric'
   },
   diet: { halal: true, noPork: true, vegan: false, vegetarian: false, lactoseFree: false, highProtein: true, highCalorie: true, lowCalorie: false, fruitVeg: false },
@@ -49,7 +49,9 @@ const defaults = {
   mealsWanted: { breakfast: true, lunch: true, dinner: true, snacks: true, shake: true },
   targets: { calories: 3100, protein: 130, carbs: 410, fat: 90, weeklyGain: .6, source: 'starter' },
   logs: [], weights: [], workouts: [], products: [], savedMeals: [], plan: null, lastGenerated: null,
-  todayNote: '', coachTone: 'direct', aiCitations: []
+  pantry: [], mealDNA: {}, shoppingHistory: [],
+  todayNote: '', coachTone: 'direct', aiCitations: [],
+  plannerBrain: { mood:'normal', cookingEffort:'low effort', foodFatigue:true, leftovers:true, pantryFirst:true, wasteSmart:true, explainList:true, confidence:true, eatingTimes:'07:30 breakfast, 11:30 lunch, 15:30 shake/snack, 18:30 dinner, 22:00 pre-bed snack' }
 };
 
 let state = loadState();
@@ -121,9 +123,9 @@ function selectedStoreStatus(){
     salling,
     exactCount,
     status: exactCount ? `Using ${exactCount} saved real-price products` : 'No real product prices saved yet',
-    live: false,
+    live: salling && !!state.profile.sallingStoreId,
     text: salling
-      ? `${store} is a Salling Group store. BulkMind can only be truly live if you connect a real retailer API route/token. Right now it uses saved product prices + marked estimates.`
+      ? (state.profile.sallingStoreId ? `${store} can use Salling live product prices for barcodes at storeId ${state.profile.sallingStoreId}. Nutrition still comes from Open Food Facts or label photo.` : `${store} is a Salling Group store, but you need a Salling storeId before live product price lookup works. Until then it uses saved prices + marked estimates.`)
       : `${store} has no verified live price connection in this app right now. It uses saved product prices + marked estimates.`
   };
 }
@@ -282,31 +284,54 @@ function renderPlanner(){
   const st = selectedStoreStatus();
   const plan = state.plan;
   const truth = priceTruth(plan);
+  const brain = state.plannerBrain || defaults.plannerBrain;
+  const pantryText = (state.pantry||[]).map(x=>typeof x==='string'?x:(x.name||'')).filter(Boolean).join('\n');
   return `
   <div class="screenTitle">Plan</div>
   ${planStepsCard()}
-  <section class="card hero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Weekly meal planner</div><div class="h2">Make a real shopping plan, not random meals.</div><p class="p">Targets used: <b>${state.targets.calories} kcal</b>, <b>${state.targets.protein}g protein</b>, <b>${state.targets.fat}g fat</b> per day. Budget is total for everyone.</p><div class="row wrap"><span class="pill">${esc(st.store)}</span><span class="pill">${p.budget} kr/week</span><span class="pill">${p.people} people</span><span class="status ${truth.cls}">${truth.label}</span></div></div></section>
+  <section class="card hero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Bulk decision engine</div><div class="h2">Tell BulkMind your real life. It builds the week.</div><p class="p">Not just meals. It uses budget, people, pantry, effort, leftovers, food fatigue, eating times, products and store pricing.</p><div class="row wrap"><span class="pill">${esc(st.store)}</span><span class="pill">${p.budget} kr/week</span><span class="pill">${p.people} people</span><span class="status ${truth.cls}">${truth.label}</span></div></div></section>
   <section class="card" id="plannerForm">
     <div class="h2">1. Shopping setup</div>
     <div class="grid2">
-      <div class="field"><label>Store you will shop in</label><select id="store">${['Netto','Lidl','REMA 1000','Føtex','Bilka','Coop 365','Meny','Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select><p class="micro">Store choice is honest: no 1:1 prices unless you have saved product prices/API data.</p></div>
-      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"><p class="micro">Example: 300 kr for 1 person, 600 kr for 2 people.</p></div>
+      <div class="field"><label>Store you will shop in</label><select id="store">${['Netto','Lidl','REMA 1000','Føtex','Bilka','Coop 365','Meny','Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select><p class="micro">Real 1:1 prices require saved product prices/API data. Missing prices are marked scan.</p></div>
+      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"><p class="micro">Total for everyone, not per person.</p></div>
       <div class="field"><label>People to feed</label><input id="people" inputmode="numeric" value="${p.people}"></div>
       <div class="field"><label>Plan style</label><select id="focus"><option>high calorie bulk</option><option>high protein</option><option>cheapest possible</option><option>balanced</option><option>low calorie</option><option>vegan</option><option>fruit/veg focus</option></select></div>
     </div>
-    <div class="sectionHeader"><h2>2. Meals wanted</h2><span>what days should contain</span></div>
+
+    <div class="sectionHeader"><h2>2. Real life mode</h2><span>how hard should cooking be?</span></div>
+    <div class="grid2">
+      <div class="field"><label>Mood today / this week</label><select id="mood"><option ${brain.mood==='normal'?'selected':''}>normal</option><option ${brain.mood==='not hungry'?'selected':''}>not hungry</option><option ${brain.mood==='lazy'?'selected':''}>lazy</option><option ${brain.mood==='broke'?'selected':''}>broke</option><option ${brain.mood==='tired'?'selected':''}>tired</option><option ${brain.mood==='comfort food'?'selected':''}>comfort food</option><option ${brain.mood==='gym fuel'?'selected':''}>gym fuel</option><option ${brain.mood==='sweet'?'selected':''}>sweet</option><option ${brain.mood==='salty'?'selected':''}>salty</option></select></div>
+      <div class="field"><label>Cooking effort</label><select id="cookingEffort"><option ${brain.cookingEffort==='0 effort / no cook'?'selected':''}>0 effort / no cook</option><option ${brain.cookingEffort==='low effort'?'selected':''}>low effort</option><option ${brain.cookingEffort==='normal 20 min'?'selected':''}>normal 20 min</option><option ${brain.cookingEffort==='meal prep'?'selected':''}>meal prep</option></select></div>
+    </div>
+    <div class="field"><label>Eating times / schedule</label><textarea id="eatingTimes">${esc(brain.eatingTimes||'')}</textarea><p class="micro">Gemini will build meal timing around this and repair missed meals.</p></div>
+    <div class="field"><label>Pantry mode: what do you already have?</label><textarea id="pantryInput" placeholder="rice\npasta\noats\nmilk\neggs\npeanut butter">${esc(pantryText)}</textarea><p class="micro">The plan should use these before adding new shopping items.</p></div>
+
+    <div class="sectionHeader"><h2>3. Automation rules</h2><span>make it smarter</span></div>
+    <div class="row wrap">
+      ${autoChip('pantryFirst','Pantry first',brain.pantryFirst)}
+      ${autoChip('leftovers','Smart leftovers',brain.leftovers)}
+      ${autoChip('foodFatigue','Avoid food fatigue',brain.foodFatigue)}
+      ${autoChip('wasteSmart','Expiry/waste smart',brain.wasteSmart)}
+      ${autoChip('explainList','Explain shopping list',brain.explainList)}
+      ${autoChip('confidence','Plan confidence score',brain.confidence)}
+    </div>
+
+    <div class="sectionHeader"><h2>4. Meals wanted</h2><span>what days should contain</span></div>
     <div class="row wrap">${chipSet('mealsWanted', state.mealsWanted)}</div>
-    <div class="sectionHeader"><h2>3. Equipment</h2><span>what you can cook with</span></div>
+    <div class="sectionHeader"><h2>5. Equipment</h2><span>what you can cook with</span></div>
     <div class="row wrap">${chipSet('equipment', state.equipment)}</div>
-    <div class="sectionHeader"><h2>4. Dietary rules</h2><span>must follow</span></div>
+    <div class="sectionHeader"><h2>6. Dietary rules</h2><span>must follow</span></div>
     <div class="row wrap">${chipSet('diet', state.diet, 'green')}</div>
-    <div class="truthBox" style="margin-top:14px"><b>Before you press generate:</b><p class="p">The app will create meals with ingredients, cooking steps and one combined shopping list. Items without reliable price data will be labeled <span class="kbd">scan</span>, not silently treated as real Netto/Lidl/REMA prices.</p></div>
-    <div class="stickyAction"><button class="btn" id="generatePlan">Generate meals + shopping list</button></div>
+    <div class="truthBox" style="margin-top:14px"><b>What v20 asks AI to do:</b><p class="p">Build a 7-day plan, reuse ingredients, use pantry first, add leftover logic, avoid repeated boring meals, score confidence, explain why each item is bought, and show what to scan next for real pricing.</p></div>
+    <div class="stickyAction"><button class="btn" id="generatePlan">Generate decision-engine plan</button></div>
   </section>
-  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan generated yet</b><p class="p">After generation, your meals, ingredients, instructions and grocery list will appear here.</p></div>`}`;
+  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan generated yet</b><p class="p">After generation, you get meals, timing, leftovers, shopping list, confidence, deals and scan tasks.</p></div>`}`;
 }
+function autoChip(key,label,active){ return `<button class="chip purple ${active?'active':''}" data-auto="${key}">${active?'✓':''} ${label}</button>`; }
 function bindPlanner(){
   $all('[data-chip]').forEach(b=>b.addEventListener('click',()=>{ const [group,key]=b.dataset.chip.split('.'); state[group][key]=!state[group][key]; save(); render(); }));
+  $all('[data-auto]').forEach(b=>b.addEventListener('click',()=>{ const key=b.dataset.auto; state.plannerBrain[key]=!state.plannerBrain[key]; save(); render(); }));
   $('#generatePlan')?.addEventListener('click', generateWeeklyPlan);
 }
 function chipSet(group, obj, color=''){
@@ -317,17 +342,33 @@ function renderPlan(plan){
   const truth = priceTruth(plan);
   const missing = plan.missingData || plan.missingPriceData || [];
   const upgrades = plan.upgradeIdeas || plan.shoppingNotes || [];
+  const conf = plan.planConfidence || plan.confidence || {};
+  const deals = plan.bestDeals || [];
+  const timing = plan.eatingSchedule || [];
+  const leftovers = plan.leftoverPlan || [];
+  const explanations = plan.explainShoppingList || plan.shoppingExplanations || [];
+  const pantryUsed = plan.pantryUsed || [];
+  const fatigue = plan.foodFatigueNotes || [];
   return `<section class="card planSummary">
-    <div class="row between"><div><div class="eyebrow">Generated result</div><div class="h2">${esc(plan.title||'Weekly plan')}</div><p class="p">${esc(plan.summary||'AI generated plan.')}</p></div><button class="btn small secondary" onclick="askAboutPlan()">Ask AI</button></div>
+    <div class="row between"><div><div class="eyebrow">Generated decision engine result</div><div class="h2">${esc(plan.title||'Weekly plan')}</div><p class="p">${esc(plan.summary||'AI generated plan.')}</p></div><button class="btn small secondary" onclick="askAboutPlan()">Ask AI</button></div>
     <div class="metricGrid">${metric('Budget', Math.round(plan.totalPrice||0)+' kr', state.profile.budget+' kr', pct(plan.totalPrice||0,state.profile.budget))}${metric('Per person', Math.round((plan.totalPrice||0)/(state.profile.people||1))+' kr', 'week', 100)}${metric('Protein', Math.round(plan.avgProtein||0)+'g', state.targets.protein+'g', pct(plan.avgProtein||0,state.targets.protein))}</div>
+    ${Object.keys(conf||{}).length?`<div class="sectionHeader"><h2>Plan confidence</h2><span>why it should work</span></div><div class="confidenceGrid">${['budgetFit','proteinFit','calorieFit','effortFit','variety','wasteControl'].map(k=>`<div class="confItem"><span>${esc(k.replace(/([A-Z])/g,' $1'))}</span><b>${Math.round(conf[k]||0)}%</b><div class="bar"><i style="width:${Math.max(0,Math.min(100,conf[k]||0))}%"></i></div></div>`).join('')}</div>`:''}
     <div class="truthBox ${truth.cls==='warn'?'warnBox':''}" style="margin-top:12px"><b>${esc(truth.label)}</b><p class="p">${esc(truth.note)}</p></div>
     ${(missing.length||upgrades.length)?`<div class="grid2" style="margin-top:12px"><div class="item"><b>What still needs data</b>${niceList(missing,'Nothing missing')}</div><div class="item"><b>Better/cheaper ideas</b>${niceList(upgrades,'No upgrade ideas yet')}</div></div>`:''}
   </section>
+  <section class="card smartLayer"><div class="h2">Smart planning layer</div><div class="grid2">
+    <div class="item"><b>Eating schedule</b>${niceList(timing,'No schedule returned')}</div>
+    <div class="item"><b>Pantry used first</b>${niceList(pantryUsed,'No pantry items used')}</div>
+    <div class="item"><b>Smart leftovers</b>${niceList(leftovers,'No leftovers planned')}</div>
+    <div class="item"><b>Food fatigue protection</b>${niceList(fatigue,'No fatigue notes')}</div>
+  </div></section>
+  ${deals.length?`<section class="card"><div class="h2">Best bulk deals in this plan</div>${deals.map(d=>`<div class="item"><div class="row between"><b>${esc(d.name||d.item||'Deal')}</b><span class="pill">${esc(d.metric||d.value||'good value')}</span></div><p class="p">${esc(d.why||d.reason||'Good value for the plan')}</p></div>`).join('')}</section>`:''}
   <div class="sectionHeader"><h2>7-day meals</h2><span>ingredients + cooking steps shown</span></div>
   <div class="dayGrid">${(plan.days||[]).map((d,idx)=>`<div class="dayCard"><div class="row between"><h3>${esc(d.day||'Day '+(idx+1))}</h3><button class="btn small secondary" onclick="swapDay(${idx})">Swap day</button></div>${(d.meals||[]).map(m=>mealCard(m)).join('')}</div>`).join('')}</div>
   <div class="sectionHeader"><h2>Shopping list</h2><span>${(plan.shoppingList||[]).length} items · for ${state.profile.people||1} people</span></div>
   <section class="card shoppingList">
-    ${(plan.shoppingList||[]).map(i=>`<div class="shoppingRow item ${i.needsPrice?'needsPrice':''}"><div><b>${esc(i.name||i.storeItemName||'Item')}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'used in plan')}</div><div class="micro">Source: ${esc(i.priceSource || (i.needsPrice?'missing/scan':'AI/saved'))} · ${esc(i.confidence || (i.needsPrice?'needs check':'medium'))}</div></div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`).join('') || '<p class="p">No shopping list. Generate again or ask AI to fix the plan.</p>'}
+    ${(plan.shoppingList||[]).map(i=>`<div class="shoppingRow item ${i.needsPrice?'needsPrice':''}"><div><b>${esc(i.name||i.storeItemName||'Item')}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'used in plan')}</div><div class="micro">Source: ${esc(i.priceSource || (i.needsPrice?'missing/scan':'AI/saved'))} · ${esc(i.confidence || (i.needsPrice?'needs check':'medium'))}</div>${i.explanation?`<p class="p">${esc(i.explanation)}</p>`:''}</div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`).join('') || '<p class="p">No shopping list. Generate again or ask AI to fix the plan.</p>'}
+    ${explanations.length?`<div class="truthBox"><b>Why this shopping list?</b>${niceList(explanations,'No explanation returned')}</div>`:''}
     <button class="btn secondary" style="margin-top:12px" onclick="openProductModal()">Scan / add missing product price</button>
   </section>`;
 }
@@ -516,7 +557,12 @@ function extractText(data){ return data.candidates?.[0]?.content?.parts?.map(p=>
 async function generateWeeklyPlan(){
   if(!requireAI()) return;
   const form = $('#plannerForm');
-  state.profile.store = $('#store').value; state.profile.budget = num($('#budget').value, state.profile.budget); state.profile.people = Math.max(1, Math.min(12, num($('#people').value,1))); save();
+  state.profile.store = $('#store').value; state.profile.budget = num($('#budget').value, state.profile.budget); state.profile.people = Math.max(1, Math.min(12, num($('#people').value,1)));
+  state.plannerBrain.mood = $('#mood')?.value || state.plannerBrain.mood;
+  state.plannerBrain.cookingEffort = $('#cookingEffort')?.value || state.plannerBrain.cookingEffort;
+  state.plannerBrain.eatingTimes = $('#eatingTimes')?.value || state.plannerBrain.eatingTimes;
+  state.pantry = ($('#pantryInput')?.value || '').split(/\n|,/).map(x=>x.trim()).filter(Boolean).map(name=>({id:safeId(), name, addedAt:todayISO()}));
+  save();
   const btn=$('#generatePlan'); btn.innerHTML='<span class="loader"></span>Gemini planning'; btn.disabled=true;
   try{
     const storeStatus = selectedStoreStatus();
@@ -547,8 +593,22 @@ NECESSARY UX REQUIREMENTS:
 - Shopping list must combine quantities for the full week and all people.
 - Include missingData and upgradeIdeas.
 
+ADDITIONAL SMART REQUIREMENTS:
+- Use pantry items before shopping if pantryFirst is true.
+- Add an eatingSchedule array with exact meal times.
+- Add smart leftovers, for example Monday dinner becomes Tuesday lunch.
+- Avoid repeating the same boring meal too many times. If budget forces repetition, say it in foodFatigueNotes.
+- Add Meal DNA notes to meals: cheapness, proteinQuality, calories, prepTime, fullness, bulkValue, dishwashing, schoolFriendly.
+- Add bestDeals for cheap calories, cheap protein, best shake ingredients.
+- Explain the shopping list item by item.
+- Add planConfidence with budgetFit, proteinFit, calorieFit, effortFit, variety, wasteControl percentages.
+- Add missingData telling user what label/price to scan next.
+Planner brain: ${JSON.stringify(state.plannerBrain)}.
+Pantry items user already has: ${JSON.stringify(state.pantry)}.
+Meal DNA learned from ratings/history: ${JSON.stringify(state.mealDNA)}.
+
 Return JSON exactly:
-{"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["100g oats","300ml saved sødmælk"],"instructions":["Cook oats","Add banana"],"why":"...","priceSource":"saved product memory/estimate","usedProducts":["..."]}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"priceSource":"saved product memory/estimate/missing","confidence":"high/medium/low","reason":"used in 3 meals","needsPrice":false}],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
+{"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"planConfidence":{"budgetFit":90,"proteinFit":88,"calorieFit":95,"effortFit":80,"variety":75,"wasteControl":85},"eatingSchedule":["07:30 breakfast: ..."],"pantryUsed":["oats used in breakfast and shakes"],"leftoverPlan":["cook double rice Monday for Tuesday lunch"],"foodFatigueNotes":["oats repeated 4 times because budget is tight"],"bestDeals":[{"name":"oats","metric":"kr/1000 kcal","why":"cheap calories"}],"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["100g oats","300ml saved sødmælk"],"instructions":["Cook oats","Add banana"],"why":"...","priceSource":"saved product memory/estimate","usedProducts":["..."],"mealDNA":{"cheapness":90,"proteinQuality":70,"prepTime":"5 min","fullness":"medium","bulkValue":95,"dishwashing":"low","schoolFriendly":true}}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"priceSource":"saved product memory/estimate/missing","confidence":"high/medium/low","reason":"used in 3 meals","explanation":"why it is bought","needsPrice":false}],"explainShoppingList":["Oats: cheap calories and used in breakfast/shakes"],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
     const res = await callGeminiJSON(prompt, state.useSearch);
     state.plan = res; save(); render(); toast('Weekly plan ready');
   }catch(e){
@@ -579,14 +639,25 @@ function localWeeklyPlan(opts={}){
   const avgCalories = slots.reduce((a,k)=>a+(baseMeals[k].calories||0),0);
   const avgProtein = slots.reduce((a,k)=>a+(baseMeals[k].protein||0),0);
   const avgFat = slots.reduce((a,k)=>a+(baseMeals[k].fat||0),0);
+  const pantryNames = (state.pantry||[]).map(x=>typeof x==='string'?x:x.name).filter(Boolean);
   return {
     title: `Local ${focus} weekly plan`,
-    summary: `Gemini could not generate the plan, so BulkMind made a reusable plan from cheap Danish staples. ${opts.error ? 'AI issue: '+opts.error : ''}`,
+    summary: `Gemini could not generate the plan, so BulkMind made a reusable plan from cheap Danish staples with v20 decision-engine logic. ${opts.error ? 'AI issue: '+opts.error : ''}`,
     totalPrice,
     avgCalories, avgProtein, avgFat,
+    planConfidence: { budgetFit: totalPrice <= budget ? 88 : 55, proteinFit: Math.min(100, Math.round((avgProtein/(state.targets.protein||130))*100)), calorieFit: Math.min(100, Math.round((avgCalories/(state.targets.calories||3100))*100)), effortFit: state.plannerBrain.cookingEffort?.includes('0') ? 70 : 85, variety: 68, wasteControl: state.plannerBrain.leftovers ? 82 : 60 },
+    eatingSchedule: (state.plannerBrain.eatingTimes||'07:30 breakfast, 11:30 lunch, 15:30 shake, 18:30 dinner, 22:00 snack').split(',').map(x=>x.trim()),
+    pantryUsed: pantryNames.length ? pantryNames.slice(0,8).map(x=>`${x} prioritized before new shopping`) : ['No pantry entered — shopping list assumes you start from zero.'],
+    leftoverPlan: ['Cook double rice/chicken at dinner and use it for next day lunch boxes.', 'Keep oats/milk/banana for repeatable breakfast and shakes.'],
+    foodFatigueNotes: ['Oats/milk appear often because they are elite bulk value. Swap two breakfasts if you get tired of them.'],
+    bestDeals: [
+      {name:'Oats', metric:'cheap calories', why:'High calories per krone and works in breakfast/shakes'},
+      {name:'Milk', metric:'easy calories', why:'Liquid calories for low appetite'},
+      {name:'Rice/pasta', metric:'cheap carbs', why:'Scales well for multiple people'}
+    ],
     days,
     shoppingList: [
-      {name:'Oats',amount:`${people*1} kg`,price:18*people,reason:'breakfast + shakes',needsPrice:false},
+      {name:'Oats',amount:`${people*1} kg`,price:18*people,reason:'breakfast + shakes',explanation:'cheap calories used in both breakfast and shakes',needsPrice:false},
       {name:'Milk',amount:`${people*7} L`,price:14*people*7,reason:'breakfast + shakes',needsPrice:false},
       {name:'Bananas',amount:`${people*14} pcs`,price:22*people,reason:'breakfast + shakes',needsPrice:false},
       {name:'Rice',amount:`${people*1.5} kg`,price:25*people,reason:'lunch boxes',needsPrice:false},
@@ -594,6 +665,7 @@ function localWeeklyPlan(opts={}){
       {name:'Pasta',amount:`${people*1} kg`,price:15*people,reason:'dinners',needsPrice:false},
       {name:'Skyr/granola',amount:`${people*2} packs`,price:45*people,reason:'snacks',needsPrice:true}
     ],
+    explainShoppingList:['Oats: cheap calories and used repeatedly', 'Milk: liquid calories for low appetite', 'Rice/pasta: cheap base for multiple meals', 'Chicken/skyr: protein sources that need real prices scanned'],
     missingData:['Scan your real chicken/skyr/protein prices to make this 1:1.'],
     upgradeIdeas: totalPrice > budget ? ['Budget is tight: reduce snacks/shake extras or use more rice/oats/eggs.'] : ['Scan real store prices to find cheaper alternatives.']
   };
@@ -678,7 +750,7 @@ function openProductModal(){
   <section class="card"><div class="seg"><button class="active" id="manualTab">Manual</button><button id="barcodeTab">Barcode/API</button></div><div id="productBody"></div></section>`);
   const body=$('#productBody',modal);
   const renderManual=()=>{ body.innerHTML=`<div class="field"><label>Product name</label><input id="pName" placeholder="Arla sødmælk 1L"></div><div class="grid2"><div class="field"><label>Category</label><select id="pCat"><option>milk</option><option>whey</option><option>oats</option><option>skyr</option><option>meat</option><option>rice/pasta</option><option>other</option></select></div><div class="field"><label>Unit</label><select id="pUnit"><option>ml</option><option>g</option></select></div><div class="field"><label>kcal/100</label><input id="pCal" inputmode="decimal"></div><div class="field"><label>protein/100</label><input id="pPro" inputmode="decimal"></div><div class="field"><label>carbs/100</label><input id="pCarb" inputmode="decimal"></div><div class="field"><label>fat/100</label><input id="pFat" inputmode="decimal"></div><div class="field"><label>Price kr</label><input id="pPrice" inputmode="decimal"></div><div class="field"><label>Package size</label><input id="pSize" inputmode="decimal" placeholder="1000"></div></div><button class="chip active" id="pPref">✓ Prefer in AI shakes/meals</button><div class="grid2" style="margin-top:12px"><button class="btn" id="saveProduct">Save product</button><button class="btn secondary" id="photoLabel">Read label photo</button></div><input type="file" accept="image/*" capture="environment" id="labelFile" class="hiddenInput">`; bindProductManual(modal); };
-  const renderBarcode=()=>{ body.innerHTML=`<div class="field"><label>Barcode number</label><input id="barcode" inputmode="numeric" placeholder="571195307...."></div><button class="btn" id="lookupBarcode">Lookup Open Food Facts</button><p class="micro">If nutrition is missing after lookup, the app will ask for a label photo instead of guessing.</p><div id="barcodeResult"></div>`; $('#lookupBarcode',modal).onclick=()=>lookupBarcode(modal); };
+  const renderBarcode=()=>{ body.innerHTML=`<div class="field"><label>Barcode number / EAN</label><input id="barcode" inputmode="numeric" placeholder="571195307...."></div><div class="grid2"><div class="field"><label>Store</label><select id="lookupStore"><option>Netto</option><option>Føtex</option><option>Bilka</option><option>Lidl</option><option>REMA 1000</option><option>Coop 365</option></select></div><div class="field"><label>Salling storeId</label><input id="lookupStoreId" placeholder="required for Netto/Føtex/Bilka" value="${esc(state.profile.sallingStoreId||'')}"></div></div><button class="btn" id="lookupBarcode">Lookup nutrition + Salling price</button><p class="micro">For Netto/Føtex/Bilka: Salling price needs a storeId and SALLING_API_TOKEN in Vercel. Nutrition comes from Open Food Facts or label photo.</p><div id="barcodeResult"></div>`; $('#lookupStore',modal).value=state.profile.store||'Netto'; $('#lookupBarcode',modal).onclick=()=>lookupBarcode(modal); };
   $('#manualTab',modal).onclick=()=>{ $('#manualTab').classList.add('active'); $('#barcodeTab').classList.remove('active'); renderManual(); };
   $('#barcodeTab',modal).onclick=()=>{ $('#barcodeTab').classList.add('active'); $('#manualTab').classList.remove('active'); renderBarcode(); };
   renderManual();
@@ -692,8 +764,57 @@ function bindProductManual(modal){
 function fileToBase64(file){ return new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(String(r.result).split(',')[1]); r.onerror=reject; r.readAsDataURL(file); }); }
 async function lookupBarcode(modal){
   const code=$('#barcode',modal).value.trim(); if(!code) return toast('Enter barcode');
+  const store=$('#lookupStore',modal)?.value || state.profile.store || 'Netto';
+  const storeId=$('#lookupStoreId',modal)?.value.trim() || state.profile.sallingStoreId || '';
+  state.profile.store = store; if(storeId) state.profile.sallingStoreId = storeId; save();
   const out=$('#barcodeResult',modal); out.innerHTML='<div class="skeleton"></div>';
-  try{ const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`); const data=await r.json(); if(!data.product) throw new Error('not found'); const pr=data.product; const n=pr.nutriments||{}; const p={id:safeId(),name:pr.product_name || pr.brands || 'Scanned product',category:guessCat(pr.product_name+' '+pr.categories),unit:(pr.quantity||'').toLowerCase().includes('ml')?'ml':'g',calories:round(n['energy-kcal_100g']||0),protein:round(n.proteins_100g||0,1),carbs:round(n.carbohydrates_100g||0,1),fat:round(n.fat_100g||0,1),price:0,packageSize:0,preferred:false,usage:0,barcode:code,createdAt:new Date().toISOString()}; out.innerHTML=`<div class="item"><b>${esc(p.name)}</b><div class="tiny">${p.calories||'?'} kcal · ${p.protein||'?'}g protein · ${p.fat||'?'}g fat</div>${(!p.calories&&!p.protein)?'<p class="p"><span class="status warn">Missing nutrition</span> Upload label photo after saving.</p>':''}<button class="btn" id="saveLookup">Save product</button></div>`; $('#saveLookup',modal).onclick=()=>{state.products.unshift(p);save();closeModal();render();toast('Product saved');}; }catch(e){ out.innerHTML='<div class="empty"><b>Not found</b><p class="p">Add manually or scan nutrition label.</p></div>'; }
+  const isSalling=['Netto','Føtex','Bilka'].includes(store);
+  let offProduct=null, sallingProduct=null, errors=[];
+  try{
+    const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`);
+    const data=await r.json();
+    if(data.product) offProduct=data.product; else errors.push('Open Food Facts: product not found');
+  }catch(e){ errors.push('Open Food Facts failed'); }
+  if(isSalling && storeId){
+    try{
+      const sr=await fetch(`/api/salling?ean=${encodeURIComponent(code)}&storeId=${encodeURIComponent(storeId)}`);
+      const sd=await sr.json();
+      if(!sr.ok) throw new Error(sd.error || sd.errorMessage || 'Salling lookup failed');
+      sallingProduct=sd;
+    }catch(e){ errors.push('Salling: '+e.message); }
+  } else if(isSalling && !storeId){ errors.push('Salling price needs storeId'); }
+  if(!offProduct && !sallingProduct){ out.innerHTML=`<div class="empty"><b>Not found</b><p class="p">${esc(errors.join(' · ') || 'No API data')}.</p><p class="p">Add manually or scan nutrition label.</p></div>`; return; }
+  const pr=offProduct||{}; const n=pr.nutriments||{}; const sp=sallingProduct?.instore || {};
+  const q=String(pr.quantity||'');
+  const p={
+    id:safeId(),
+    name:sp.name || pr.product_name || pr.brands || 'Scanned product',
+    category:guessCat((sp.name||'')+' '+(pr.product_name||'')+' '+(pr.categories||'')),
+    unit:(q.toLowerCase().includes('ml') || sp.unit==='l')?'ml':'g',
+    calories:round(n['energy-kcal_100g']||0),
+    protein:round(n.proteins_100g||0,1),
+    carbs:round(n.carbohydrates_100g||0,1),
+    fat:round(n.fat_100g||0,1),
+    price:round(sp.price || 0,2),
+    unitPrice:round(sp.unitPrice || 0,2),
+    packageSize:guessPackageSize(q, sp.contents, sp.contentsUnit),
+    store, storeId,
+    priceSource: sallingProduct ? `Salling API (${store}, storeId ${storeId})` : 'missing/manual',
+    campaign: sp.campaign || null, deposit: sp.deposit || null,
+    preferred:false, usage:0, barcode:code, createdAt:new Date().toISOString()
+  };
+  const missingNutrition=!p.calories&&!p.protein&&!p.carbs&&!p.fat;
+  const priceLine = sallingProduct ? `${p.price} kr${p.unitPrice?` · ${p.unitPrice} kr/${esc(sp.unit||p.unit)}`:''}` : 'No live price';
+  const campaignLine = p.campaign ? `<div class="micro">Campaign: ${esc(p.campaign.displayText || p.campaign.text || '')}</div>` : '';
+  out.innerHTML=`<div class="item"><b>${esc(p.name)}</b><div class="tiny">${p.calories||'?'} kcal · ${p.protein||'?'}g protein · ${p.fat||'?'}g fat /100${p.unit}</div><div class="tiny">Price: ${priceLine}</div><div class="micro">${esc(p.priceSource)}</div>${campaignLine}${missingNutrition?'<p class="p"><span class="status warn">Missing nutrition</span> Save it, then scan label photo so AI can use exact macros.</p>':''}${errors.length?`<p class="micro">Notes: ${esc(errors.join(' · '))}</p>`:''}<button class="btn" id="saveLookup">Save product memory</button></div>`;
+  $('#saveLookup',modal).onclick=()=>{state.products.unshift(p);save();closeModal();render();toast('Product saved with '+(sallingProduct?'Salling price':'no live price'));};
+}
+function guessPackageSize(quantity='', contents=0, unit=''){
+  const q=String(quantity).toLowerCase().replace(',','.');
+  const m=q.match(/([0-9.]+)\s*(l|ml|kg|g)/);
+  if(m){ const val=Number(m[1]); const u=m[2]; if(u==='l') return val*1000; if(u==='kg') return val*1000; return val; }
+  if(contents){ const val=Number(contents)||0; if(String(unit).toLowerCase()==='l') return val*1000; if(String(unit).toLowerCase()==='kg') return val*1000; return val; }
+  return 0;
 }
 function guessCat(txt=''){ const t=txt.toLowerCase(); if(t.includes('mælk')||t.includes('milk'))return'milk'; if(t.includes('whey')||t.includes('protein'))return'whey'; if(t.includes('havre')||t.includes('oat'))return'oats'; if(t.includes('skyr'))return'skyr'; if(t.includes('kylling')||t.includes('chicken'))return'meat'; return'other'; }
 

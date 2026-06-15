@@ -1,5 +1,5 @@
 {
-  "name": "BulkMind",
+  "name": "BulkMind v20",
   "short_name": "BulkMind",
   "description": "AI-first meal planner and bulk coach",
   "start_url": "/index.html",
@@ -9,7 +9,17 @@
   "background_color": "#101014",
   "theme_color": "#101014",
   "icons": [
-    {"src":"icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-    {"src":"icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
   ]
 }

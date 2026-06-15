@@ -24,3 +24,9 @@ main{height:calc(100dvh - var(--top) - var(--nav) - var(--safe-top) - var(--safe
 .guideCard{background:linear-gradient(135deg,rgba(129,230,164,.10),rgba(128,214,255,.08))}.miniList{margin:7px 0 0;padding-left:17px;color:var(--muted);font-size:13px;line-height:1.42}.miniList li{margin:4px 0}.planSummary .metricGrid{margin-top:12px}
 .detailedMeal{grid-template-columns:84px 1fr;align-items:start}.detailedMeal .mealDetails{grid-column:1/-1;background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:18px;padding:12px;margin-top:2px}.detailedMeal .mealDetails b{display:block;margin:8px 0 2px}.shoppingList .needsPrice{border-color:rgba(255,224,113,.35);background:rgba(255,224,113,.06)}
 @media(max-width:390px){.detailedMeal{grid-template-columns:70px 1fr}.detailedMeal .mealDetails{padding:10px}.stepList{font-size:13px}.truthBox{padding:10px}.miniList{font-size:12px}}
+/* v20 decision engine additions */
+.chip.purple.active{background:rgba(189,165,255,.18);border-color:rgba(189,165,255,.50)}
+.confidenceGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px}
+.confItem{background:#111118;border:1px solid var(--line);border-radius:20px;padding:12px}
+.confItem span{text-transform:capitalize;color:var(--muted);font-size:12px}.confItem b{display:block;font-size:20px;margin:3px 0}.smartLayer{background:linear-gradient(135deg,rgba(255,155,84,.10),rgba(189,165,255,.09))}
+@media(max-width:390px){.confidenceGrid{grid-template-columns:1fr}.confItem{padding:10px}}

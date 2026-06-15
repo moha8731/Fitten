@@ -1,51 +1,8 @@
-const VERSION = 'v12';
-const SHELL = `bulkmind-shell-${VERSION}`;
-const RUNTIME = `bulkmind-runtime-${VERSION}`;
-const ASSETS = ['./','./index.html','./styles.css','./app.js','./manifest.json','./icon-192.png','./icon-512.png','./offline.html'];
-
-self.addEventListener('install', event => {
-  event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(ASSETS)));
-});
-
-self.addEventListener('activate', event => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter(key => ![SHELL, RUNTIME].includes(key)).map(key => caches.delete(key)));
-    await self.clients.claim();
-  })());
-});
-
-self.addEventListener('message', event => {
-  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
-});
-
-self.addEventListener('fetch', event => {
-  const req = event.request;
-  if (req.method !== 'GET') return;
-  const url = new URL(req.url);
-  if (url.origin !== location.origin) return;
-
-  if (req.mode === 'navigate') {
-    event.respondWith((async () => {
-      try {
-        const fresh = await fetch(req);
-        const cache = await caches.open(RUNTIME);
-        cache.put(req, fresh.clone());
-        return fresh;
-      } catch {
-        return (await caches.match(req)) || (await caches.match('./index.html')) || (await caches.match('./offline.html'));
-      }
-    })());
-    return;
-  }
-
-  event.respondWith((async () => {
-    const cache = await caches.open(RUNTIME);
-    const cached = await caches.match(req);
-    const network = fetch(req).then(response => {
-      if (response.ok) cache.put(req, response.clone());
-      return response;
-    }).catch(() => null);
-    return cached || network || Response.error();
-  })());
+const CACHE = 'bulkmind-v13-revamp';
+const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/offline.html', '/icon-192.png', '/icon-512.png', '/assets/shake.svg', '/assets/meal.svg', '/assets/grocery.svg', '/assets/train.svg', '/assets/progress.svg'];
+self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(fetch(e.request).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); return res; }).catch(() => caches.match(e.request).then(r => r || caches.match('/offline.html'))));
 });

@@ -1,43 +1,20 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
-  <meta name="theme-color" content="#0b0d12" />
-  <meta name="color-scheme" content="dark light" />
-  <meta name="description" content="BulkMind — a personal AI nutrition, shake, workout and progress coach." />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="BulkMind" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="format-detection" content="telephone=no" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="apple-touch-icon" href="icon-192.png" />
-  <link rel="icon" href="icon-192.png" />
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="theme-color" content="#101014">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BulkMind">
+  <meta name="description" content="AI-first bulk meal planner and fitness coach.">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
   <title>BulkMind</title>
 </head>
 <body>
-  <div id="app" class="app-root" aria-live="polite"></div>
-
-  <dialog id="sheet" class="sheet">
-    <div class="sheet-handle" aria-hidden="true"></div>
-    <div class="sheet-header">
-      <div>
-        <p id="sheetEyebrow" class="eyebrow"></p>
-        <h2 id="sheetTitle">BulkMind</h2>
-      </div>
-      <button id="closeSheet" class="icon-button" type="button" aria-label="Close">×</button>
-    </div>
-    <div id="sheetBody" class="sheet-body"></div>
-  </dialog>
-
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <div id="updateBar" class="update-bar hidden">
-    <span>A new BulkMind version is ready.</span>
-    <button id="reloadApp" type="button">Update</button>
-  </div>
-
-  <script type="module" src="app.js"></script>
+  <div id="app" class="app"></div>
+  <script src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const VERSION = 'v20-decision-engine';
+const VERSION = 'v21-price-intelligence';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
@@ -51,7 +51,17 @@ const defaults = {
   logs: [], weights: [], workouts: [], products: [], savedMeals: [], plan: null, lastGenerated: null,
   pantry: [], mealDNA: {}, shoppingHistory: [],
   todayNote: '', coachTone: 'direct', aiCitations: [],
-  plannerBrain: { mood:'normal', cookingEffort:'low effort', foodFatigue:true, leftovers:true, pantryFirst:true, wasteSmart:true, explainList:true, confidence:true, eatingTimes:'07:30 breakfast, 11:30 lunch, 15:30 shake/snack, 18:30 dinner, 22:00 pre-bed snack' }
+  plannerBrain: { mood:'normal', cookingEffort:'low effort', foodFatigue:true, leftovers:true, pantryFirst:true, wasteSmart:true, explainList:true, confidence:true, eatingTimes:'07:30 breakfast, 11:30 lunch, 15:30 shake/snack, 18:30 dinner, 22:00 pre-bed snack' },
+  priceIntel: {
+    mode: 'Nemlig + online flyers',
+    sources: { nemlig: true, onlineFlyers: true, salling: false, savedProducts: true, manual: true },
+    bufferPct: 10,
+    sanityCheck: true,
+    inflationAware: true,
+    rejectCrazyPrices: true,
+    preferOnlinePrices: true,
+    priceRegion: 'Denmark'
+  }
 };
 
 let state = loadState();
@@ -113,29 +123,118 @@ function mealNameIcon(name=''){
   return '🍽️';
 }
 
+
+function activePriceSources(){
+  const pi = state.priceIntel || defaults.priceIntel;
+  return Object.keys(pi.sources || {}).filter(k => pi.sources[k]).map(k => ({nemlig:'Nemlig', onlineFlyers:'online tilbudsaviser', salling:'Salling API', savedProducts:'saved products', manual:'manual prices'}[k] || k));
+}
+function priceSourceLabel(){
+  const pi = state.priceIntel || defaults.priceIntel;
+  return `${pi.mode || 'saved + estimates'} · +${pi.bufferPct ?? 10}% safety buffer`;
+}
+function basePriceCategory(name=''){
+  const t = String(name).toLowerCase();
+  if(/banan|banana/.test(t)) return {cat:'banana', unit:'kg', min:8, max:35, extreme:60};
+  if(/mælk|milk|sødmælk|letmælk|minimælk|skummet/.test(t)) return {cat:'milk', unit:'l', min:6, max:22, extreme:35};
+  if(/havre|oat|oats/.test(t)) return {cat:'oats', unit:'kg', min:8, max:35, extreme:60};
+  if(/ris|rice/.test(t)) return {cat:'rice', unit:'kg', min:10, max:45, extreme:80};
+  if(/pasta/.test(t)) return {cat:'pasta', unit:'kg', min:8, max:45, extreme:80};
+  if(/kylling|chicken|hakket okse|beef|kød/.test(t)) return {cat:'meat', unit:'kg', min:35, max:130, extreme:220};
+  if(/æg|egg/.test(t)) return {cat:'eggs', unit:'pack', min:15, max:45, extreme:80};
+  if(/skyr|yoghurt|yogurt/.test(t)) return {cat:'skyr/yogurt', unit:'item', min:10, max:35, extreme:60};
+  if(/whey|proteinpulver|protein powder/.test(t)) return {cat:'whey', unit:'kg', min:120, max:350, extreme:600};
+  if(/peanut|jordnød|nut butter/.test(t)) return {cat:'peanut butter', unit:'jar', min:15, max:65, extreme:100};
+  return {cat:'generic grocery', unit:'item', min:2, max:120, extreme:250};
+}
+function applyPriceBuffer(price){
+  const pct = Number(state.priceIntel?.bufferPct ?? 10);
+  const p = Number(price)||0;
+  return p > 0 ? round(p * (1 + pct/100), 2) : 0;
+}
+function sanityCheckPrice(item){
+  const price = Number(item.price)||0;
+  const rawName = item.name || item.storeItemName || '';
+  const cat = basePriceCategory(rawName);
+  let warning = '';
+  let blocked = false;
+  if(price <= 0){ warning = 'needs price'; }
+  else if(price > cat.extreme){ warning = `unrealistic for ${cat.cat}; check price/source`; blocked = true; }
+  else if(price > cat.max){ warning = `high for ${cat.cat}; possible but verify`; }
+  else if(price < cat.min){ warning = `low for ${cat.cat}; maybe campaign/amount issue`; }
+  return { ...cat, warning, blocked };
+}
+function normalizePlanPrices(plan){
+  if(!plan) return plan;
+  const pi = state.priceIntel || defaults.priceIntel;
+  const list = Array.isArray(plan.shoppingList) ? plan.shoppingList : [];
+  let baseTotal = 0, bufferedTotal = 0;
+  const warnings = [];
+  plan.shoppingList = list.map((it)=>{
+    const base = Number(it.basePrice ?? it.price ?? 0) || 0;
+    const buffered = base ? applyPriceBuffer(base) : 0;
+    const item = { ...it, basePrice: base, price: buffered || base, bufferPct: Number(pi.bufferPct ?? 10), buffered: !!base };
+    const check = pi.sanityCheck ? sanityCheckPrice(item) : {warning:''};
+    item.priceCheck = check.warning || 'ok';
+    if(check.warning) warnings.push(`${item.name || 'Item'}: ${check.warning}`);
+    if(check.blocked && pi.rejectCrazyPrices){ item.needsPrice = true; item.priceSource = 'blocked by sanity check'; }
+    if(!item.priceSource) item.priceSource = 'AI/saved estimate';
+    if(item.priceSource.toLowerCase().includes('estimate')) item.needsPrice = true;
+    baseTotal += base;
+    bufferedTotal += Number(item.price)||0;
+    return item;
+  });
+  plan.baseTotalPrice = round(baseTotal,2);
+  plan.totalPrice = round(bufferedTotal || Number(plan.totalPrice)||0,2);
+  plan.priceAudit = {
+    mode: pi.mode,
+    sources: activePriceSources(),
+    bufferPct: Number(pi.bufferPct ?? 10),
+    baseTotal: round(baseTotal,2),
+    bufferedTotal: round(bufferedTotal,2),
+    warningCount: warnings.length,
+    warnings: warnings.slice(0,12),
+    note: `All item prices shown include a ${Number(pi.bufferPct ?? 10)}% safety buffer unless they are missing.`
+  };
+  return plan;
+}
+function compactProductForPrice(p){
+  return { name:p.name, category:p.category, store:p.store, price:p.price, packageSize:p.packageSize, unit:p.unit, calories:p.calories, protein:p.protein, preferred:p.preferred, priceSource:p.priceSource };
+}
+function priceStatusIcon(i){
+  if(i.needsPrice) return '⚠️';
+  if((i.priceCheck||'').includes('high') || (i.priceCheck||'').includes('low')) return '👀';
+  return '✅';
+}
+
 function selectedStoreStatus(){
-  const store = state.profile.store || 'Netto';
+  const store = state.profile.store || 'Nemlig';
   const salling = ['Netto','Føtex','Bilka'].includes(store);
+  const pi = state.priceIntel || defaults.priceIntel;
   const realPriced = (state.products||[]).filter(p => p.price && p.packageSize && (p.calories || p.protein));
   const exactCount = realPriced.length;
+  const online = pi.sources?.nemlig || pi.sources?.onlineFlyers;
   return {
     store,
     salling,
     exactCount,
-    status: exactCount ? `Using ${exactCount} saved real-price products` : 'No real product prices saved yet',
+    mode: pi.mode,
+    bufferPct: pi.bufferPct,
+    status: exactCount ? `${exactCount} saved real-price products + online price scout` : 'Online price scout + estimates until products are saved',
     live: salling && !!state.profile.sallingStoreId,
-    text: salling
-      ? (state.profile.sallingStoreId ? `${store} can use Salling live product prices for barcodes at storeId ${state.profile.sallingStoreId}. Nutrition still comes from Open Food Facts or label photo.` : `${store} is a Salling Group store, but you need a Salling storeId before live product price lookup works. Until then it uses saved prices + marked estimates.`)
-      : `${store} has no verified live price connection in this app right now. It uses saved product prices + marked estimates.`
+    text: online
+      ? `Price mode is ${pi.mode}. BulkMind asks Gemini/search to find Danish online/Nemlig/flyer price candidates, then adds ${pi.bufferPct}% buffer and sanity-checks unrealistic prices. If a price cannot be verified, it is marked as estimate/scan.`
+      : (salling ? `${store} can use Salling API when storeId/token is configured. Otherwise it uses saved prices and estimates.` : `${store} uses saved prices/manual prices/estimates unless you add online price scout.`)
   };
 }
 function priceTruth(plan){
   const list = plan?.shoppingList || [];
-  const needs = list.filter(i => i.needsPrice || !i.price || String(i.priceSource||'').toLowerCase().includes('estimate')).length;
+  const audit = plan?.priceAudit;
+  const needs = list.filter(i => i.needsPrice || !i.price || String(i.priceSource||'').toLowerCase().includes('estimate') || String(i.priceCheck||'').includes('verify')).length;
   const real = list.length - needs;
   if(!list.length) return {label:'No shopping list yet', cls:'warn', note:'Generate a plan first.'};
-  if(needs===0) return {label:'All items priced', cls:'', note:'This list is based on saved/API prices in the plan.'};
-  return {label:`${needs} items need price check`, cls:'warn', note:`${real} items have prices, ${needs} are estimates or missing. Scan/enter prices to make it 1:1.`};
+  const buffer = audit?.bufferPct ?? state.priceIntel?.bufferPct ?? 10;
+  if(needs===0) return {label:'Prices checked + buffered', cls:'', note:`All listed prices include +${buffer}% buffer and passed the sanity check.`};
+  return {label:`${needs} prices need review`, cls:'warn', note:`${real} items look usable. ${needs} are estimates, missing, too high/low, or need a scan. Prices shown include +${buffer}% buffer when available.`};
 }
 function niceList(arr, empty='No details provided'){
   if(!arr || !arr.length) return `<p class="tiny">${empty}</p>`;
@@ -188,8 +287,8 @@ function renderWelcome(){
       <div class="h1">A food app that actually tells you what to eat.</div>
       <p class="p">No messy leader dashboard. First connect Gemini, then BulkMind plans calories, macros, Danish-style budgets, meals, shakes and grocery lists around your goal.</p>
       <div class="aiBox" style="margin:14px 0">
-        <b>What changed in v17</b>
-        <p class="p">Storage fallback, safer iPhone startup, AI setup, weekly planner, product memory, dietary targets and less clutter.</p>
+        <b>What changed in v21</b>
+        <p class="p">Price scout, 10% buffer, sanity checks, action cards, fewer chat-box answers.</p>
       </div>
       <button class="btn" id="startSetup">Start setup</button>
       <button class="btn secondary" style="margin-top:10px" onclick="openSettings(true)">Connect Gemini first</button>
@@ -285,53 +384,65 @@ function renderPlanner(){
   const plan = state.plan;
   const truth = priceTruth(plan);
   const brain = state.plannerBrain || defaults.plannerBrain;
+  const pi = state.priceIntel || defaults.priceIntel;
   const pantryText = (state.pantry||[]).map(x=>typeof x==='string'?x:(x.name||'')).filter(Boolean).join('\n');
   return `
   <div class="screenTitle">Plan</div>
-  ${planStepsCard()}
-  <section class="card hero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Bulk decision engine</div><div class="h2">Tell BulkMind your real life. It builds the week.</div><p class="p">Not just meals. It uses budget, people, pantry, effort, leftovers, food fatigue, eating times, products and store pricing.</p><div class="row wrap"><span class="pill">${esc(st.store)}</span><span class="pill">${p.budget} kr/week</span><span class="pill">${p.people} people</span><span class="status ${truth.cls}">${truth.label}</span></div></div></section>
+  <section class="card hero compactHero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Food operating system</div><div class="h2">Make a plan you can actually shop.</div><p class="p shortText">Store, budget, kitchen, diet, pantry and price checks. AI works in the background — the app gives actions.</p><div class="row wrap"><span class="pill">${esc(st.store)}</span><span class="pill">${p.budget} kr</span><span class="pill">${p.people} people</span><span class="status ${truth.cls}">${truth.label}</span></div></div></section>
+
   <section class="card" id="plannerForm">
-    <div class="h2">1. Shopping setup</div>
+    <div class="h2">Shopping setup</div>
+    <div class="quickTiles">
+      <button class="tile active" data-store-fast="Nemlig">Nemlig</button>
+      <button class="tile" data-store-fast="Lidl">Lidl</button>
+      <button class="tile" data-store-fast="REMA 1000">REMA</button>
+      <button class="tile" data-store-fast="Netto">Netto</button>
+    </div>
     <div class="grid2">
-      <div class="field"><label>Store you will shop in</label><select id="store">${['Netto','Lidl','REMA 1000','Føtex','Bilka','Coop 365','Meny','Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select><p class="micro">Real 1:1 prices require saved product prices/API data. Missing prices are marked scan.</p></div>
-      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"><p class="micro">Total for everyone, not per person.</p></div>
+      <div class="field"><label>Store / main source</label><select id="store">${['Nemlig','Lidl','REMA 1000','Netto','Føtex','Bilka','Coop 365','Meny','Online flyers','Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"></div>
       <div class="field"><label>People to feed</label><input id="people" inputmode="numeric" value="${p.people}"></div>
-      <div class="field"><label>Plan style</label><select id="focus"><option>high calorie bulk</option><option>high protein</option><option>cheapest possible</option><option>balanced</option><option>low calorie</option><option>vegan</option><option>fruit/veg focus</option></select></div>
+      <div class="field"><label>Goal style</label><select id="focus"><option>high calorie bulk</option><option>high protein</option><option>cheapest possible</option><option>balanced</option><option>low calorie</option><option>vegan</option><option>fruit/veg focus</option></select></div>
     </div>
 
-    <div class="sectionHeader"><h2>2. Real life mode</h2><span>how hard should cooking be?</span></div>
+    <div class="sectionHeader compact"><h2>Price intelligence</h2><span>${esc(priceSourceLabel())}</span></div>
     <div class="grid2">
-      <div class="field"><label>Mood today / this week</label><select id="mood"><option ${brain.mood==='normal'?'selected':''}>normal</option><option ${brain.mood==='not hungry'?'selected':''}>not hungry</option><option ${brain.mood==='lazy'?'selected':''}>lazy</option><option ${brain.mood==='broke'?'selected':''}>broke</option><option ${brain.mood==='tired'?'selected':''}>tired</option><option ${brain.mood==='comfort food'?'selected':''}>comfort food</option><option ${brain.mood==='gym fuel'?'selected':''}>gym fuel</option><option ${brain.mood==='sweet'?'selected':''}>sweet</option><option ${brain.mood==='salty'?'selected':''}>salty</option></select></div>
+      <div class="field"><label>Price source mode</label><select id="priceMode"><option ${pi.mode==='Nemlig + online flyers'?'selected':''}>Nemlig + online flyers</option><option ${pi.mode==='Online flyers only'?'selected':''}>Online flyers only</option><option ${pi.mode==='Saved prices first'?'selected':''}>Saved prices first</option><option ${pi.mode==='Salling API + saved'?'selected':''}>Salling API + saved</option><option ${pi.mode==='Manual/estimate only'?'selected':''}>Manual/estimate only</option></select></div>
+      <div class="field"><label>Safety buffer %</label><input id="priceBuffer" inputmode="decimal" value="${pi.bufferPct ?? 10}"><p class="micro">BulkMind adds this to every price before showing the total.</p></div>
+    </div>
+    <div class="row wrap priceSources">
+      ${priceChip('nemlig','Nemlig.dk',pi.sources?.nemlig)}
+      ${priceChip('onlineFlyers','Online aviser',pi.sources?.onlineFlyers)}
+      ${priceChip('savedProducts','Saved scans',pi.sources?.savedProducts)}
+      ${priceChip('salling','Salling API',pi.sources?.salling)}
+      ${priceChip('manual','Manual prices',pi.sources?.manual)}
+    </div>
+    <div class="truthBox compactBox"><b>Price rules</b><p class="p shortText">The app will not accept crazy prices. A banana cannot cost 100 kr without being flagged. Missing/uncertain prices become scan tasks, not fake certainty.</p></div>
+
+    <div class="sectionHeader compact"><h2>Real life</h2><span>less text, more decisions</span></div>
+    <div class="grid2">
+      <div class="field"><label>Mood</label><select id="mood"><option ${brain.mood==='normal'?'selected':''}>normal</option><option ${brain.mood==='not hungry'?'selected':''}>not hungry</option><option ${brain.mood==='lazy'?'selected':''}>lazy</option><option ${brain.mood==='broke'?'selected':''}>broke</option><option ${brain.mood==='tired'?'selected':''}>tired</option><option ${brain.mood==='gym fuel'?'selected':''}>gym fuel</option></select></div>
       <div class="field"><label>Cooking effort</label><select id="cookingEffort"><option ${brain.cookingEffort==='0 effort / no cook'?'selected':''}>0 effort / no cook</option><option ${brain.cookingEffort==='low effort'?'selected':''}>low effort</option><option ${brain.cookingEffort==='normal 20 min'?'selected':''}>normal 20 min</option><option ${brain.cookingEffort==='meal prep'?'selected':''}>meal prep</option></select></div>
     </div>
-    <div class="field"><label>Eating times / schedule</label><textarea id="eatingTimes">${esc(brain.eatingTimes||'')}</textarea><p class="micro">Gemini will build meal timing around this and repair missed meals.</p></div>
-    <div class="field"><label>Pantry mode: what do you already have?</label><textarea id="pantryInput" placeholder="rice\npasta\noats\nmilk\neggs\npeanut butter">${esc(pantryText)}</textarea><p class="micro">The plan should use these before adding new shopping items.</p></div>
-
-    <div class="sectionHeader"><h2>3. Automation rules</h2><span>make it smarter</span></div>
-    <div class="row wrap">
-      ${autoChip('pantryFirst','Pantry first',brain.pantryFirst)}
-      ${autoChip('leftovers','Smart leftovers',brain.leftovers)}
-      ${autoChip('foodFatigue','Avoid food fatigue',brain.foodFatigue)}
-      ${autoChip('wasteSmart','Expiry/waste smart',brain.wasteSmart)}
-      ${autoChip('explainList','Explain shopping list',brain.explainList)}
-      ${autoChip('confidence','Plan confidence score',brain.confidence)}
-    </div>
-
-    <div class="sectionHeader"><h2>4. Meals wanted</h2><span>what days should contain</span></div>
-    <div class="row wrap">${chipSet('mealsWanted', state.mealsWanted)}</div>
-    <div class="sectionHeader"><h2>5. Equipment</h2><span>what you can cook with</span></div>
-    <div class="row wrap">${chipSet('equipment', state.equipment)}</div>
-    <div class="sectionHeader"><h2>6. Dietary rules</h2><span>must follow</span></div>
-    <div class="row wrap">${chipSet('diet', state.diet, 'green')}</div>
-    <div class="truthBox" style="margin-top:14px"><b>What v20 asks AI to do:</b><p class="p">Build a 7-day plan, reuse ingredients, use pantry first, add leftover logic, avoid repeated boring meals, score confidence, explain why each item is bought, and show what to scan next for real pricing.</p></div>
-    <div class="stickyAction"><button class="btn" id="generatePlan">Generate decision-engine plan</button></div>
+    <div class="field"><label>Pantry / already have</label><textarea id="pantryInput" placeholder="rice, oats, milk, eggs...">${esc(pantryText)}</textarea></div>
+    <details class="moreDetails"><summary>Advanced rules</summary>
+      <div class="field"><label>Eating times</label><textarea id="eatingTimes">${esc(brain.eatingTimes||'')}</textarea></div>
+      <div class="row wrap">${autoChip('pantryFirst','Pantry first',brain.pantryFirst)}${autoChip('leftovers','Leftovers',brain.leftovers)}${autoChip('foodFatigue','Avoid repeats',brain.foodFatigue)}${autoChip('wasteSmart','Waste smart',brain.wasteSmart)}${autoChip('confidence','Confidence',brain.confidence)}</div>
+      <div class="sectionHeader compact"><h2>Meals</h2><span>wanted</span></div><div class="row wrap">${chipSet('mealsWanted', state.mealsWanted)}</div>
+      <div class="sectionHeader compact"><h2>Equipment</h2><span>available</span></div><div class="row wrap">${chipSet('equipment', state.equipment)}</div>
+      <div class="sectionHeader compact"><h2>Diet</h2><span>rules</span></div><div class="row wrap">${chipSet('diet', state.diet, 'green')}</div>
+    </details>
+    <div class="stickyAction"><button class="btn" id="generatePlan">Generate usable weekly plan</button></div>
   </section>
-  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan generated yet</b><p class="p">After generation, you get meals, timing, leftovers, shopping list, confidence, deals and scan tasks.</p></div>`}`;
+  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan yet</b><p class="p">Generate once. The output will be cards, prices, swaps and scan tasks — not a long chat answer.</p></div>`}`;
 }
+function priceChip(key,label,active){ return `<button class="chip blue ${active?'active':''}" data-price-source="${key}">${active?'✓':''} ${label}</button>`; }
 function autoChip(key,label,active){ return `<button class="chip purple ${active?'active':''}" data-auto="${key}">${active?'✓':''} ${label}</button>`; }
 function bindPlanner(){
   $all('[data-chip]').forEach(b=>b.addEventListener('click',()=>{ const [group,key]=b.dataset.chip.split('.'); state[group][key]=!state[group][key]; save(); render(); }));
   $all('[data-auto]').forEach(b=>b.addEventListener('click',()=>{ const key=b.dataset.auto; state.plannerBrain[key]=!state.plannerBrain[key]; save(); render(); }));
+  $all('[data-price-source]').forEach(b=>b.addEventListener('click',()=>{ const key=b.dataset.priceSource; state.priceIntel.sources[key]=!state.priceIntel.sources[key]; save(); render(); }));
+  $all('[data-store-fast]').forEach(b=>b.addEventListener('click',()=>{ state.profile.store=b.dataset.storeFast; save(); render(); }));
   $('#generatePlan')?.addEventListener('click', generateWeeklyPlan);
 }
 function chipSet(group, obj, color=''){
@@ -339,38 +450,64 @@ function chipSet(group, obj, color=''){
   return Object.keys(obj).map(k=>`<button class="chip ${color} ${obj[k]?'active':''}" data-chip="${group}.${k}">${obj[k]?'✓':''} ${labels[k]||k}</button>`).join('');
 }
 function renderPlan(plan){
+  plan = normalizePlanPrices(plan);
   const truth = priceTruth(plan);
   const missing = plan.missingData || plan.missingPriceData || [];
   const upgrades = plan.upgradeIdeas || plan.shoppingNotes || [];
   const conf = plan.planConfidence || plan.confidence || {};
   const deals = plan.bestDeals || [];
-  const timing = plan.eatingSchedule || [];
-  const leftovers = plan.leftoverPlan || [];
-  const explanations = plan.explainShoppingList || plan.shoppingExplanations || [];
-  const pantryUsed = plan.pantryUsed || [];
-  const fatigue = plan.foodFatigueNotes || [];
-  return `<section class="card planSummary">
-    <div class="row between"><div><div class="eyebrow">Generated decision engine result</div><div class="h2">${esc(plan.title||'Weekly plan')}</div><p class="p">${esc(plan.summary||'AI generated plan.')}</p></div><button class="btn small secondary" onclick="askAboutPlan()">Ask AI</button></div>
-    <div class="metricGrid">${metric('Budget', Math.round(plan.totalPrice||0)+' kr', state.profile.budget+' kr', pct(plan.totalPrice||0,state.profile.budget))}${metric('Per person', Math.round((plan.totalPrice||0)/(state.profile.people||1))+' kr', 'week', 100)}${metric('Protein', Math.round(plan.avgProtein||0)+'g', state.targets.protein+'g', pct(plan.avgProtein||0,state.targets.protein))}</div>
-    ${Object.keys(conf||{}).length?`<div class="sectionHeader"><h2>Plan confidence</h2><span>why it should work</span></div><div class="confidenceGrid">${['budgetFit','proteinFit','calorieFit','effortFit','variety','wasteControl'].map(k=>`<div class="confItem"><span>${esc(k.replace(/([A-Z])/g,' $1'))}</span><b>${Math.round(conf[k]||0)}%</b><div class="bar"><i style="width:${Math.max(0,Math.min(100,conf[k]||0))}%"></i></div></div>`).join('')}</div>`:''}
-    <div class="truthBox ${truth.cls==='warn'?'warnBox':''}" style="margin-top:12px"><b>${esc(truth.label)}</b><p class="p">${esc(truth.note)}</p></div>
-    ${(missing.length||upgrades.length)?`<div class="grid2" style="margin-top:12px"><div class="item"><b>What still needs data</b>${niceList(missing,'Nothing missing')}</div><div class="item"><b>Better/cheaper ideas</b>${niceList(upgrades,'No upgrade ideas yet')}</div></div>`:''}
+  const audit = plan.priceAudit || {};
+  const actions = plan.nextActions || buildPlanActions(plan);
+  return `<section class="card planSummary appResult">
+    <div class="row between"><div><div class="eyebrow">Your week</div><div class="h2">${esc(plan.title||'Weekly plan')}</div></div><button class="btn small secondary" onclick="regeneratePlanFocused('make this easier and more realistic')">Regenerate</button></div>
+    <div class="metricGrid">${metric('Budget', Math.round(plan.totalPrice||0)+' kr', state.profile.budget+' kr', pct(plan.totalPrice||0,state.profile.budget))}${metric('Buffer', '+'+(audit.bufferPct ?? state.priceIntel?.bufferPct ?? 10)+'%', 'included', 100)}${metric('Protein', Math.round(plan.avgProtein||0)+'g', state.targets.protein+'g', pct(plan.avgProtein||0,state.targets.protein))}</div>
+    <div class="truthBox ${truth.cls==='warn'?'warnBox':''}"><b>${esc(truth.label)}</b><p class="p shortText">${esc(truth.note)}</p></div>
   </section>
-  <section class="card smartLayer"><div class="h2">Smart planning layer</div><div class="grid2">
-    <div class="item"><b>Eating schedule</b>${niceList(timing,'No schedule returned')}</div>
-    <div class="item"><b>Pantry used first</b>${niceList(pantryUsed,'No pantry items used')}</div>
-    <div class="item"><b>Smart leftovers</b>${niceList(leftovers,'No leftovers planned')}</div>
-    <div class="item"><b>Food fatigue protection</b>${niceList(fatigue,'No fatigue notes')}</div>
-  </div></section>
-  ${deals.length?`<section class="card"><div class="h2">Best bulk deals in this plan</div>${deals.map(d=>`<div class="item"><div class="row between"><b>${esc(d.name||d.item||'Deal')}</b><span class="pill">${esc(d.metric||d.value||'good value')}</span></div><p class="p">${esc(d.why||d.reason||'Good value for the plan')}</p></div>`).join('')}</section>`:''}
-  <div class="sectionHeader"><h2>7-day meals</h2><span>ingredients + cooking steps shown</span></div>
-  <div class="dayGrid">${(plan.days||[]).map((d,idx)=>`<div class="dayCard"><div class="row between"><h3>${esc(d.day||'Day '+(idx+1))}</h3><button class="btn small secondary" onclick="swapDay(${idx})">Swap day</button></div>${(d.meals||[]).map(m=>mealCard(m)).join('')}</div>`).join('')}</div>
-  <div class="sectionHeader"><h2>Shopping list</h2><span>${(plan.shoppingList||[]).length} items · for ${state.profile.people||1} people</span></div>
-  <section class="card shoppingList">
-    ${(plan.shoppingList||[]).map(i=>`<div class="shoppingRow item ${i.needsPrice?'needsPrice':''}"><div><b>${esc(i.name||i.storeItemName||'Item')}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'used in plan')}</div><div class="micro">Source: ${esc(i.priceSource || (i.needsPrice?'missing/scan':'AI/saved'))} · ${esc(i.confidence || (i.needsPrice?'needs check':'medium'))}</div>${i.explanation?`<p class="p">${esc(i.explanation)}</p>`:''}</div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`).join('') || '<p class="p">No shopping list. Generate again or ask AI to fix the plan.</p>'}
-    ${explanations.length?`<div class="truthBox"><b>Why this shopping list?</b>${niceList(explanations,'No explanation returned')}</div>`:''}
-    <button class="btn secondary" style="margin-top:12px" onclick="openProductModal()">Scan / add missing product price</button>
+  <section class="actionPanel">${actions.slice(0,4).map(a=>`<button class="actionCard" onclick="${esc(a.action||'')}"><span>${esc(a.icon||'✨')}</span><b>${esc(a.title||'Action')}</b><small>${esc(a.subtitle||'')}</small></button>`).join('')}</section>
+  ${renderPriceAudit(audit, missing, upgrades)}
+  ${Object.keys(conf||{}).length?renderConfidence(conf):''}
+  ${deals.length?renderDeals(deals):''}
+  <div class="sectionHeader compact"><h2>Meals</h2><span>tap meal to log or swap</span></div>
+  <div class="dayGrid compactDays">${(plan.days||[]).map((d,idx)=>`<div class="dayCard"><div class="row between"><h3>${esc(d.day||'Day '+(idx+1))}</h3><button class="btn small secondary" onclick="swapDay(${idx})">Swap</button></div>${(d.meals||[]).map(m=>mealCard(m)).join('')}</div>`).join('')}</div>
+  <div class="sectionHeader compact"><h2>Shopping list</h2><span>${(plan.shoppingList||[]).length} items · ${state.profile.people||1} people</span></div>
+  <section class="card shoppingList appList">
+    ${(plan.shoppingList||[]).map(shoppingRow).join('') || '<p class="p">No shopping list. Generate again.</p>'}
+    <div class="grid2" style="margin-top:12px"><button class="btn secondary" onclick="openProductModal()">Scan price/product</button><button class="btn secondary" onclick="regeneratePlanFocused('replace expensive or uncertain items with cheaper Danish alternatives')">Cheaper swap</button></div>
   </section>`;
+}
+function buildPlanActions(plan){
+  return [
+    {icon:'🛒', title:'Shop this list', subtitle:`${round(plan.totalPrice||0,0)} kr with buffer`, action:'scrollToShopping()'},
+    {icon:'⚠️', title:'Fix uncertain prices', subtitle:`${(plan.shoppingList||[]).filter(i=>i.needsPrice).length} need check`, action:'openProductModal()'},
+    {icon:'🔁', title:'Cheaper swaps', subtitle:'replace expensive items', action:"regeneratePlanFocused('make the plan cheaper but keep calories and protein')"},
+    {icon:'🥤', title:'Make today easy', subtitle:'quick bulk rescue', action:'quickShake()'}
+  ];
+}
+function renderPriceAudit(audit={}, missing=[], upgrades=[]){
+  return `<section class="card priceAudit"><div class="row between"><div><div class="eyebrow">Price engine</div><div class="h2">${esc(audit.mode || state.priceIntel?.mode || 'Price check')}</div></div><span class="status ${audit.warningCount?'warn':''}">${audit.warningCount||0} warnings</span></div>
+    <div class="miniStats"><div><b>${round(audit.baseTotal||0,2)} kr</b><span>before buffer</span></div><div><b>${round(audit.bufferedTotal||0,2)} kr</b><span>after buffer</span></div><div><b>${esc((audit.sources||activePriceSources()).join(' + ')||'saved')}</b><span>sources</span></div></div>
+    ${audit.warnings?.length?`<details class="moreDetails" open><summary>Price warnings</summary>${niceList(audit.warnings,'No warnings')}</details>`:''}
+    ${(missing.length||upgrades.length)?`<div class="grid2"><div class="item"><b>Scan next</b>${niceList(missing,'Nothing missing')}</div><div class="item"><b>Suggested upgrades</b>${niceList(upgrades,'No upgrades')}</div></div>`:''}
+  </section>`;
+}
+function renderConfidence(conf){
+  return `<section class="card"><div class="h2">Plan confidence</div><div class="confidenceGrid">${['budgetFit','proteinFit','calorieFit','effortFit','variety','wasteControl'].map(k=>`<div class="confItem"><span>${esc(k.replace(/([A-Z])/g,' $1'))}</span><b>${Math.round(conf[k]||0)}%</b><div class="bar"><i style="width:${Math.max(0,Math.min(100,conf[k]||0))}%"></i></div></div>`).join('')}</div></section>`;
+}
+function renderDeals(deals){
+  return `<section class="card"><div class="h2">Best value picks</div>${deals.slice(0,6).map(d=>`<div class="valueRow item"><div><b>${esc(d.name||d.item||'Deal')}</b><div class="tiny">${esc(d.metric||d.value||'good value')}</div></div><p class="p shortText">${esc(d.why||d.reason||'Good value for the plan')}</p></div>`).join('')}</section>`;
+}
+function shoppingRow(i){
+  return `<div class="shoppingRow item ${i.needsPrice?'needsPrice':''}" id="shoppingList"><div><b>${priceStatusIcon(i)} ${esc(i.name||i.storeItemName||'Item')}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'used in plan')}</div><div class="micro">${esc(i.priceSource || 'source unknown')} · ${esc(i.priceCheck || i.confidence || 'unchecked')}</div></div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`;
+}
+function scrollToShopping(){ document.querySelector('.shoppingList')?.scrollIntoView({behavior:'smooth', block:'start'}); }
+async function regeneratePlanFocused(instruction){
+  if(!state.plan) return generateWeeklyPlan();
+  if(!requireAI()) return;
+  toast('Updating plan...');
+  try{
+    const res = await callGeminiJSON(`Update this BulkMind weekly plan as structured JSON, not chat. Instruction: ${instruction}. Keep same schema, shoppingList prices as base prices before buffer. Apply Danish realism. Existing plan: ${JSON.stringify(state.plan)} Context: ${JSON.stringify({profile:state.profile,targets:state.targets,diet:state.diet,priceIntel:state.priceIntel,products:state.products.map(compactProductForPrice)})}`, state.useSearch);
+    state.plan = normalizePlanPrices(res); save(); render(); toast('Plan updated');
+  }catch(e){ toast('Update failed: '+e.message); }
 }
 function mealCard(m, saved=false){
   const type = m.type || m.slot || m.name || 'meal';
@@ -558,6 +695,8 @@ async function generateWeeklyPlan(){
   if(!requireAI()) return;
   const form = $('#plannerForm');
   state.profile.store = $('#store').value; state.profile.budget = num($('#budget').value, state.profile.budget); state.profile.people = Math.max(1, Math.min(12, num($('#people').value,1)));
+  state.priceIntel.mode = $('#priceMode')?.value || state.priceIntel.mode;
+  state.priceIntel.bufferPct = Math.max(0, Math.min(35, num($('#priceBuffer')?.value, state.priceIntel.bufferPct ?? 10)));
   state.plannerBrain.mood = $('#mood')?.value || state.plannerBrain.mood;
   state.plannerBrain.cookingEffort = $('#cookingEffort')?.value || state.plannerBrain.cookingEffort;
   state.plannerBrain.eatingTimes = $('#eatingTimes')?.value || state.plannerBrain.eatingTimes;
@@ -568,12 +707,16 @@ async function generateWeeklyPlan(){
     const storeStatus = selectedStoreStatus();
     const prompt = `Create a practical 7-day Danish grocery meal plan as JSON only. This is a user-facing app, so the result must explain exactly what the user should eat, what ingredients go into every meal, how to cook it, and what to buy.
 
-HONEST PRICE RULES:
-- Selected store: ${state.profile.store}.
-- Do NOT claim live 1:1 ${state.profile.store} prices unless the exact item comes from saved product memory with price/package size or a clearly connected official API result.
-- If price is only a normal Danish estimate, set priceSource to "estimate" and needsPrice true when uncertain.
-- If price comes from saved product memory, set priceSource to "saved product memory" and needsPrice false.
-- If nutrition or price is missing, put it in missingData and mark the shoppingList item as needsPrice true.
+PRICE INTELLIGENCE RULES:
+- Selected store/source: ${state.profile.store}.
+- Price mode: ${state.priceIntel.mode}. Active sources: ${JSON.stringify(activePriceSources())}.
+- Use Danish online prices if search is available, especially Nemlig.dk and online tilbudsaviser, but NEVER pretend a price is exact if you cannot verify it.
+- Return shoppingList item price as BASE price before buffer. The app will add ${state.priceIntel.bufferPct}% buffer after generation.
+- If a price is found online, set priceSource to "online price candidate: [source/name]" and confidence high/medium/low.
+- If a price is from saved product memory, set priceSource to "saved product memory" and needsPrice false.
+- If price is an estimate, set priceSource to "estimate" and needsPrice true.
+- Do sanity checks: bananas cannot cost 100 kr, normal milk cannot cost 100 kr/L, etc. Suspicious prices must go in missingData or priceWarnings.
+- Inflation aware: use current Danish grocery price level, not old/2019 prices.
 - Store status: ${JSON.stringify(storeStatus)}.
 
 USER PLAN:
@@ -591,7 +734,8 @@ NECESSARY UX REQUIREMENTS:
 - Reuse ingredients across meals to stay within budget.
 - Keep the plan realistic for Denmark and the selected store, but clearly label estimates.
 - Shopping list must combine quantities for the full week and all people.
-- Include missingData and upgradeIdeas.
+- Include missingData, upgradeIdeas and priceWarnings.
+- Keep text short. This is not a chat box. Return structured cards/actions.
 
 ADDITIONAL SMART REQUIREMENTS:
 - Use pantry items before shopping if pantryFirst is true.
@@ -608,11 +752,11 @@ Pantry items user already has: ${JSON.stringify(state.pantry)}.
 Meal DNA learned from ratings/history: ${JSON.stringify(state.mealDNA)}.
 
 Return JSON exactly:
-{"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"planConfidence":{"budgetFit":90,"proteinFit":88,"calorieFit":95,"effortFit":80,"variety":75,"wasteControl":85},"eatingSchedule":["07:30 breakfast: ..."],"pantryUsed":["oats used in breakfast and shakes"],"leftoverPlan":["cook double rice Monday for Tuesday lunch"],"foodFatigueNotes":["oats repeated 4 times because budget is tight"],"bestDeals":[{"name":"oats","metric":"kr/1000 kcal","why":"cheap calories"}],"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["100g oats","300ml saved sødmælk"],"instructions":["Cook oats","Add banana"],"why":"...","priceSource":"saved product memory/estimate","usedProducts":["..."],"mealDNA":{"cheapness":90,"proteinQuality":70,"prepTime":"5 min","fullness":"medium","bulkValue":95,"dishwashing":"low","schoolFriendly":true}}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"priceSource":"saved product memory/estimate/missing","confidence":"high/medium/low","reason":"used in 3 meals","explanation":"why it is bought","needsPrice":false}],"explainShoppingList":["Oats: cheap calories and used in breakfast/shakes"],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
+{"title":"...","summary":"max 18 words","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"nextActions":[{"icon":"🛒","title":"Shop list","subtitle":"short","action":"scrollToShopping()"}],"priceAudit":{"mode":"...","sources":["Nemlig","online flyers"],"baseTotal":270,"bufferedTotal":297,"bufferPct":10,"warnings":["Bananas price looks high; verify"],"warningCount":1},"planConfidence":{"budgetFit":90,"proteinFit":88,"calorieFit":95,"effortFit":80,"variety":75,"wasteControl":85},"eatingSchedule":["07:30 breakfast: ..."],"pantryUsed":["oats used in breakfast and shakes"],"leftoverPlan":["cook double rice Monday for Tuesday lunch"],"foodFatigueNotes":["oats repeated 4 times because budget is tight"],"bestDeals":[{"name":"oats","metric":"kr/1000 kcal","why":"cheap calories"}],"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["100g oats","300ml saved sødmælk"],"instructions":["Cook oats","Add banana"],"why":"short reason","priceSource":"saved product memory/online candidate/estimate","usedProducts":["..."],"mealDNA":{"cheapness":90,"proteinQuality":70,"prepTime":"5 min","fullness":"medium","bulkValue":95,"dishwashing":"low","schoolFriendly":true}}]}],"shoppingList":[{"name":"...","amount":"...","basePrice":20,"price":20,"priceSource":"online price candidate: Nemlig / saved product memory / estimate / missing","confidence":"high/medium/low","reason":"used in 3 meals","explanation":"max 12 words","needsPrice":false}],"explainShoppingList":["Oats: cheap calories and used in breakfast/shakes"],"missingData":["scan price for item"],"upgradeIdeas":["cheaper/better alternatives"],"priceWarnings":["..."]}`;
     const res = await callGeminiJSON(prompt, state.useSearch);
-    state.plan = res; save(); render(); toast('Weekly plan ready');
+    state.plan = normalizePlanPrices(res); save(); render(); toast('Weekly plan ready');
   }catch(e){
-    state.plan = localWeeklyPlan({ error: e.message, focus: $('#focus')?.value || 'high calorie bulk' });
+    state.plan = normalizePlanPrices(localWeeklyPlan({ error: e.message, focus: $('#focus')?.value || 'high calorie bulk' }));
     save(); render(); toast('Gemini issue — local weekly plan made');
   }
 }

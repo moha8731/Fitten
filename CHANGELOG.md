@@ -1,3 +1,17 @@
+# Changelog
+
+## v12
+- Added “People to feed” to the weekly planner.
+- Budget is now treated as the total weekly budget for all people.
+- Shopping lists and product amounts scale automatically for 1-12 people.
+- Meal calories/protein/carbs/fat are shown per person/serving, so logging a planned meal still logs one person’s portion.
+- Plan cards now show total cost and estimated cost per person.
+
+## v11
+- Mise-style Danish weekly planner with store selection, kitchen equipment, dietary rules, budget, meal selection and reusable shopping list.
+- Product Memory now powers weekly plans and flags missing nutrition/prices.
+- Added meal swap and add-to-today buttons.
+
 # BulkMind v9 — Product Memory automation
 
 This version turns product scanning into a real memory system instead of a dead-end scan screen.
@@ -17,3 +31,11 @@ This version turns product scanning into a real memory system instead of a dead-
 ## Notes
 - Price comparison works between products you have saved. BulkMind does not search live supermarket prices.
 - Open Food Facts data can be incomplete, so always review scanned products before saving.
+
+
+## v10
+- Added Denmark price planner inspired by meal-planner price apps.
+- Added receipt/shelf-label price scan with Gemini vision.
+- Added exact package price memory, cost per protein/kcal, and cheapest saved product suggestions.
+- Added optional Salling Group API settings/connector shell for Netto/Føtex/Bilka sources when user has API access.
+- Shake/meal generation now receives real saved Danish prices and should ask for missing nutrition/price instead of guessing.

@@ -52,7 +52,7 @@ h1,h2,h3,p{margin-top:0}h1{font-size:clamp(34px,10vw,54px);line-height:.95;lette
 .insight{padding:16px;display:grid;grid-template-columns:auto 1fr;gap:12px}.insight-icon{width:38px;height:38px;border-radius:13px;background:rgba(96,165,250,.11);display:grid;place-items:center}.insight p{margin:0;color:#c4ccd8;line-height:1.45;font-size:14px}.entry-list{display:grid;gap:8px}.entry{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}.entry-icon{width:36px;height:36px;border-radius:12px;background:var(--panel-3);display:grid;place-items:center}.entry strong{font-size:13px;display:block}.entry small{color:var(--muted)}.entry .kcal{font-weight:850;font-size:13px}.empty{padding:22px;text-align:center;color:var(--muted)}
 
 /* Food */
-.segmented{display:grid;grid-template-columns:repeat(3,1fr);padding:4px;background:var(--panel);border:1px solid var(--line);border-radius:16px}.segmented button{border:0;background:transparent;color:var(--muted);height:38px;border-radius:12px;font-weight:800;font-size:12px}.segmented button.active{background:var(--panel-3);color:var(--text)}
+.segmented{display:grid;grid-template-columns:repeat(5,minmax(72px,1fr));gap:4px;overflow-x:auto;padding:4px;background:var(--panel);border:1px solid var(--line);border-radius:16px;-webkit-overflow-scrolling:touch;scrollbar-width:none}.segmented::-webkit-scrollbar{display:none}.segmented button{border:0;background:transparent;color:var(--muted);height:38px;border-radius:12px;font-weight:800;font-size:12px}.segmented button.active{background:var(--panel-3);color:var(--text)}
 .generator-card{padding:16px;display:grid;gap:14px}.generator-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}.generator-hero .emoji{font-size:34px}.preset-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:3px;scrollbar-width:none}.preset-row::-webkit-scrollbar{display:none}.preset{white-space:nowrap;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:9px 11px;font-weight:750;font-size:12px}.food-card{padding:15px;display:grid;gap:12px}.food-top{display:flex;justify-content:space-between;gap:12px}.food-title strong{font-size:17px;display:block}.food-title span{color:var(--muted);font-size:12px}.food-macros{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.food-macros div{background:var(--panel-3);border-radius:12px;padding:8px;text-align:center}.food-macros strong{display:block;font-size:13px}.food-macros span{font-size:9px;color:var(--muted)}.food-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ingredients{font-size:13px;color:#c6ceda;line-height:1.5}.ingredients ul{margin:8px 0 0;padding-left:19px}
 
 /* Train */
@@ -76,13 +76,13 @@ body.light{--bg:#f4f6f8;--panel:#ffffff;--panel-2:#f7f8fa;--panel-3:#edf1f5;--te
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
 
 /* v8 Product scanning */
-.segmented{grid-template-columns:repeat(4,1fr)}
+.segmented{grid-template-columns:repeat(5,minmax(66px,1fr))}
 .quick-grid.tight{gap:8px}
 .camera-preview{width:100%;max-height:320px;object-fit:cover;border-radius:18px;border:1px solid var(--line);background:#000}
 @media(max-width:430px){.segmented button{font-size:10.5px;padding:0 2px}.quick-grid.tight{grid-template-columns:1fr}.food-macros{grid-template-columns:repeat(2,1fr)}}
 
 /* v9 Product Memory automation */
-.product-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.product-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .product-stats div{background:var(--panel-3);border-radius:14px;padding:10px;text-align:center}
 .product-stats strong{display:block;font-size:20px;letter-spacing:-.03em}
 .product-stats span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
@@ -97,4 +97,17 @@ body.light{--bg:#f4f6f8;--panel:#ffffff;--panel-2:#f7f8fa;--panel-3:#edf1f5;--te
 .check-row{display:flex;align-items:flex-start;gap:9px;padding:12px 13px;border:1px solid var(--line);background:var(--panel);border-radius:14px;color:#c8cfdb;font-size:13px;font-weight:750;line-height:1.35}
 .check-row input{margin-top:2px;accent-color:var(--accent)}
 .check-row.full{grid-column:1/-1}
-@media(max-width:430px){.product-stats{grid-template-columns:1fr 1fr 1fr}.product-memory{display:grid}.used-products{display:grid}}
+@media(max-width:430px){.product-stats{grid-template-columns:1fr 1fr}.product-memory{display:grid}.used-products{display:grid}}
+
+.compact-price .food-actions{margin-top:10px}.compact-price .food-top{gap:8px}.light .shopping-note{background:rgba(96,165,250,.11)}
+
+/* v11 Weekly DK meal planner */
+.segmented{grid-template-columns:repeat(6,minmax(66px,1fr))}
+.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.check-row{min-height:44px;display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:var(--panel-2);border-radius:14px;padding:10px 11px;font-size:13px;font-weight:750;color:var(--text)}.check-row input{width:18px;height:18px;accent-color:var(--accent)}
+.plan-day{padding:14px;display:grid;gap:10px}.plan-day h3{margin:0}.plan-meals{display:grid;gap:8px}.plan-meal{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:15px;background:var(--panel)}.plan-meal strong{display:block;font-size:14px}.plan-meal small{display:block;color:var(--muted);font-size:11px;line-height:1.35;margin-top:2px}.shopping-list{padding:8px;display:grid;gap:6px}.shop-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:14px;background:var(--panel)}.shop-row strong{display:block;font-size:14px}.shop-row small{display:block;color:var(--muted);font-size:11px;margin-top:2px}.product-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}.product-stats div{background:var(--panel-3);border-radius:14px;padding:10px;text-align:center}.product-stats strong{display:block;font-size:18px}.product-stats span{font-size:10px;color:var(--muted)}
+@media(max-width:430px){.check-grid{grid-template-columns:1fr}.plan-meal{grid-template-columns:1fr}.plan-meal>.row{justify-content:stretch}.plan-meal .icon-button{width:100%;height:42px}.shop-row{align-items:flex-start}.product-stats{grid-template-columns:1fr 1fr;gap:6px}.product-stats strong{font-size:15px}}
+
+/* v12 household planner polish */
+.mini-explain{border-style:dashed}
+.muted-row{background:transparent!important;border:1px dashed var(--line)}
+.muted-row strong{color:var(--text)}

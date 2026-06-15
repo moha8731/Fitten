@@ -1,4 +1,4 @@
-const APP_VERSION = 9;
+const APP_VERSION = 12;
 const LEGACY_KEY = 'bulkmind.v1';
 const DB_NAME = 'bulkmind-db';
 const DB_STORE = 'kv';
@@ -26,15 +26,17 @@ const initialState = {
   version: APP_VERSION,
   profile: null,
   onboardingDraft: null,
-  settings: { theme: 'dark', geminiKey: '', geminiModel: 'gemini-2.5-flash-lite' },
+  settings: { theme: 'dark', geminiKey: '', geminiModel: 'gemini-2.5-flash-lite', sallingApiKey: '', sallingStoreId: '', priceCountry: 'DK', defaultStore: 'Netto' },
   logs: {},
   savedFoods: [],
   generatedFoods: [],
   products: [],
+  mealPlans: [],
+  activeMealPlan: null,
   workoutPlan: null,
   workoutLogs: [],
   chat: [],
-  ui: { tab: 'today', foodSegment: 'generate' }
+  ui: { tab: 'today', foodSegment: 'planner' }
 };
 
 let state = structuredClone(initialState);
@@ -271,13 +273,145 @@ function entryList(log) {
 
 function foodScreen() {
   const seg=state.ui.foodSegment || 'generate';
-  return `<div class="segmented"><button data-action="food-segment" data-segment="generate" class="${seg==='generate'?'active':''}">Generate</button><button data-action="food-segment" data-segment="log" class="${seg==='log'?'active':''}">Quick log</button><button data-action="food-segment" data-segment="products" class="${seg==='products'?'active':''}">Products</button><button data-action="food-segment" data-segment="saved" class="${seg==='saved'?'active':''}">Saved</button></div>${seg==='generate'?foodGenerateHTML():seg==='log'?foodLogHTML():seg==='products'?productLibraryHTML():savedFoodHTML()}`;
+  return `<div class="segmented"><button data-action="food-segment" data-segment="planner" class="${seg==='planner'?'active':''}">Planner</button><button data-action="food-segment" data-segment="generate" class="${seg==='generate'?'active':''}">Generate</button><button data-action="food-segment" data-segment="log" class="${seg==='log'?'active':''}">Log</button><button data-action="food-segment" data-segment="prices" class="${seg==='prices'?'active':''}">Prices</button><button data-action="food-segment" data-segment="products" class="${seg==='products'?'active':''}">Products</button><button data-action="food-segment" data-segment="saved" class="${seg==='saved'?'active':''}">Saved</button></div>${seg==='planner'?weeklyPlannerHTML():seg==='generate'?foodGenerateHTML():seg==='log'?foodLogHTML():seg==='prices'?pricePlannerHTML():seg==='products'?productLibraryHTML():savedFoodHTML()}`;
 }
 function foodGenerateHTML() {
   const {calorieGap,proteinGap}=currentGaps();
-  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein. Saved products are reused automatically.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><button class="secondary full" data-action="scan-food">Scan product / label</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
+  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Fastest option</p><h3>Generate exactly what is missing</h3><p class="subtle">Current gap: ${calorieGap} kcal and ${proteinGap}g protein. Saved products are reused automatically.</p></div><span class="emoji">⚡</span></div><button class="primary full" data-action="smart-meal">Make the best meal now</button><button class="secondary full" data-action="scan-food">Scan product / label</button><button class="secondary full" data-action="open-weekly-planner">Plan my week</button><button class="secondary full" data-action="open-dk-prices">DK price planner</button><div class="preset-row"><button class="preset" data-action="preset-generate" data-preset="shake">🥤 Shake</button><button class="preset" data-action="preset-generate" data-preset="cheap">💸 Cheap</button><button class="preset" data-action="preset-generate" data-preset="low-volume">🪶 Low volume</button><button class="preset" data-action="preset-generate" data-preset="school">🎒 Portable</button><button class="preset" data-action="preset-generate" data-preset="fridge">🧊 Use ingredients</button></div></div>
     <div class="section-title"><div><p class="eyebrow">Recently generated</p><h3>Ready to reuse</h3></div></div>${recentGeneratedHTML()}`;
 }
+
+function weeklyPlannerHTML() {
+  const plan = state.activeMealPlan || state.mealPlans?.[0];
+  const priced = (state.products || []).filter(p => pricePer100(p) > 0).length;
+  const store = state.settings.defaultStore || 'Netto';
+  return `<div class="generator-card card"><div class="generator-hero"><div><p class="eyebrow">Mise-style DK planner</p><h3>Build a week around your real life</h3><p class="subtle">Choose store, kitchen tools, dietary rules, meals and weekly budget. Product Memory + exact saved prices are reused across meals.</p></div><span class="emoji">🛒</span></div><button class="primary full" data-action="open-weekly-planner">Create weekly meal plan</button><div class="quick-grid tight"><button class="quick-action" data-action="scan-price-label"><span class="icon">🧾</span><strong>Scan prices</strong><small>${priced} priced products saved</small></button><button class="quick-action" data-action="scan-food"><span class="icon">▣</span><strong>Add food product</strong><small>Nutrition + barcode</small></button></div><p class="privacy-note">Current default store: ${escapeHTML(store)}. Exact prices only come from saved product prices, receipts, shelf labels or working retailer APIs.</p></div>
+  ${plan ? weeklyPlanCardHTML(plan) : `<div class="empty card">No weekly plan yet. Build one and BulkMind will create meals + one combined shopping list that reuses ingredients.</div>`}`;
+}
+function storeOptions(){return [['Netto','Netto'],['Lidl','Lidl'],['REMA 1000','REMA 1000'],['Føtex','Føtex'],['Bilka','Bilka'],['Coop 365','Coop 365'],['Meny','Meny'],['Aldi/Other','Other / custom']];}
+function openWeeklyPlanner(){
+  const p=state.profile||defaultProfile;
+  openSheet('Weekly meal planner','Store + budget + people',`<form id="weekPlanForm" class="sheet-form stack">
+    <div class="card card-pad"><h3>Make a real weekly plan</h3><p class="subtle">Pick where you shop, how many people you need to feed, what equipment you have, what meals you want, and the total weekly budget. BulkMind scales the shopping list for everyone but keeps calories/macros shown per person.</p></div>
+    <div class="form-grid">
+      ${selectField('store','Store',state.settings.defaultStore||'Netto',storeOptions())}
+      ${field('weeklyBudget','Total weekly budget (kr)','number','300','Total for everyone, example: 300, 500, 900')}
+      ${field('servings','People to feed','number','1','Example: 1 for only you, 2 for you + friend, 4 for family')}
+      ${selectField('plannerStyle','Main priority','high-calorie',[['high-calorie','High calorie bulk'],['high-protein','High protein'],['cheap','Cheapest possible'],['balanced','Balanced'],['low-calorie','Low calorie'],['vegan','Vegan'],['fruit-veg','More fruit/veg']])}
+    </div>
+    <div class="card card-pad mini-explain"><strong>How people scaling works</strong><p class="subtle">Meals show macros per person. The shopping list and total cost are scaled for everyone you feed, so 4 people means roughly 4× ingredients.</p></div>
+    <div class="card card-pad stack"><h3>Meals included</h3><div class="check-grid">${plannerCheckboxes('meals',['breakfast','lunch','dinner','snack','shake'],['Breakfast','Lunch','Dinner','Snack','Bulk shake'],['breakfast','lunch','dinner','shake'])}</div></div>
+    <div class="card card-pad stack"><h3>Kitchen tools</h3><div class="check-grid">${plannerCheckboxes('tools',['stove','oven','airfryer','microwave','blender','no-cook'],['Komfur','Ovn','Airfryer','Mikroovn','Blender','No-cook'],['stove','airfryer','blender'])}</div></div>
+    <div class="card card-pad stack"><h3>Dietary rules</h3><div class="check-grid">${plannerCheckboxes('rules',['halal','vegan','vegetarian','lactose-free','no-pork','no-fish','fruit'],['Halal','Vegan','Vegetarian','Lactose-free','No pork','No fish','Fruit/veg focus'],String(p.restrictions||'').toLowerCase().includes('halal')?['halal','no-pork']:[])}</div></div>
+    ${areaField('extraPlannerNotes','Extra notes','','Example: I hate tuna, I want school lunch, I only want dinner, I need easy airfryer food')}
+    <div class="form-actions"><button type="button" class="primary full" data-action="generate-week-plan">Generate weekly plan</button><p class="privacy-note">${state.settings.geminiKey?'Gemini can help with variety.':'No Gemini key: local planner still works using your saved products.'}</p></div>
+  </form>`)
+}
+function plannerCheckboxes(name, values, labels, checked=[]){return values.map((v,i)=>`<label class="check-row"><input type="checkbox" name="${name}" value="${v}" ${checked.includes(v)?'checked':''}> <span>${escapeHTML(labels[i])}</span></label>`).join('')}
+async function generateWeeklyPlan(){
+  const form=$('#weekPlanForm'); if(!form)return;
+  const fd=new FormData(form);
+  const data={store:fd.get('store')||'Netto',weeklyBudget:Number(fd.get('weeklyBudget')||300),servings:clamp(Number(fd.get('servings')||1),1,12),plannerStyle:fd.get('plannerStyle')||'high-calorie',meals:fd.getAll('meals'),tools:fd.getAll('tools'),rules:fd.getAll('rules'),extraPlannerNotes:fd.get('extraPlannerNotes')||''};
+  if(!data.meals.length){toast('Choose at least one meal');return}
+  state.settings.defaultStore=data.store;
+  openSheet('Building your week','Budget + reuse + products',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Creating a combined plan for ${data.servings} ${data.servings===1?'person':'people'} at ${escapeHTML(data.store)}…</p></div></div>`);
+  try{
+    const plan=state.settings.geminiKey?await generateWeekPlanWithGemini(data):generateLocalWeekPlan(data);
+    state.activeMealPlan=plan; state.mealPlans=[plan,...(state.mealPlans||[])].slice(0,10);
+    await saveState(); render(); openSheet(plan.name,plan.source==='gemini'?'Gemini weekly plan':'Local weekly plan',weeklyPlanCardHTML(plan,true));
+  }catch(err){console.error(err);const plan=generateLocalWeekPlan(data);state.activeMealPlan=plan;state.mealPlans=[plan,...(state.mealPlans||[])].slice(0,10);await saveState();render();openSheet(plan.name,'Gemini failed — local plan ready',`<div class="card card-pad"><p class="subtle">Gemini could not make the plan, so BulkMind made a local plan from your saved prices/products instead.</p></div>${weeklyPlanCardHTML(plan,true)}`)}
+}
+async function generateWeekPlanWithGemini(data){
+  const prompt=`You are BulkMind's Denmark weekly meal planner. Build a practical 7-day meal plan for ${data.servings} ${data.servings===1?'person':'people'}.
+User profile for the primary user who logs meals: ${JSON.stringify(state.profile)}
+Primary user's personal targets: ${JSON.stringify(getTargets())}
+Planner settings, including people/servings count and total weekly budget for everyone: ${JSON.stringify(data)}
+Saved product memory with exact nutrition and saved Danish prices: ${JSON.stringify((state.products||[]).map(p=>({id:p.id,name:p.name,brand:p.brand,category:p.category,unit:p.unit,defaultAmount:p.defaultAmount,retailer:p.retailer,pricePer100:pricePer100(p),packageAmount:p.packageAmount,pricePackage:p.pricePackage,per100:p.per100,incomplete:isProductIncomplete(p)})).slice(0,50))}
+Rules:
+- Respect selected store, dietary rules, tools, number of people and total budget.
+- IMPORTANT: calories/protein/carbs/fat per meal must be PER PERSON/SERVING for the primary user. Ingredient amounts, shopping list amounts, and costs must be TOTAL for all people.
+- Reuse ingredients across days to reduce waste and cost.
+- Use saved products/prices when available. If exact price/nutrition is missing, mark it in missingData; do not pretend it is exact.
+- If the budget is unrealistic, still make the cheapest close plan and explain the gap.
+- Return ONLY JSON with this shape: {"name":"","store":"","budget":0,"servings":1,"totalCost":0,"costPerPerson":0,"exactPriceCoverage":0,"notes":[""],"missingData":[""],"days":[{"day":"Monday","meals":[{"id":"","type":"breakfast|lunch|dinner|snack|shake","name":"","calories":0,"protein":0,"carbs":0,"fat":0,"cost":0,"ingredients":[{"name":"","amount":0,"unit":"g/ml/piece","productId":"optional saved id"}],"instructions":[""]}]}],"shoppingList":[{"name":"","amount":0,"unit":"g/ml/piece","estimatedCost":0,"productId":"optional saved id","missingPrice":false,"missingNutrition":false,"usedIn":[""]}]}.`;
+  const plan=await geminiRequestLong(prompt,true,5200);
+  return normalizeWeekPlan({...plan,id:uid(),createdAt:new Date().toISOString(),source:'gemini'},data);
+}
+async function geminiRequestLong(prompt,wantJSON=false,maxOutputTokens=5200){const key=state.settings.geminiKey?.trim();if(!key)throw new Error('No Gemini key');const model=state.settings.geminiModel||'gemini-2.5-flash-lite';const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:.35,maxOutputTokens,...(wantJSON?{responseMimeType:'application/json'}:{})}})});if(!res.ok)throw new Error(`Gemini ${res.status}: ${await res.text()}`);const data=await res.json();const text=data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')?.trim();if(!text)throw new Error('Empty AI response');return wantJSON?JSON.parse(stripJSON(text)):text}
+const WEEK_DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const FALLBACK_PRODUCTS={
+  milk:{name:'milk',unit:'ml',category:'milk',per100:{calories:64,protein:3.4,carbs:4.8,fat:3.5},pricePer100:1.3},oats:{name:'oats',unit:'g',category:'oats',per100:{calories:380,protein:13,carbs:62,fat:7},pricePer100:.9},banana:{name:'banana',unit:'g',category:'fruit',per100:{calories:89,protein:1.1,carbs:23,fat:.3},pricePer100:2.2},pb:{name:'peanut butter',unit:'g',category:'peanut-butter',per100:{calories:600,protein:25,carbs:16,fat:50},pricePer100:3.0},rice:{name:'rice',unit:'g',category:'rice',per100:{calories:360,protein:7,carbs:78,fat:.8},pricePer100:1.1},pasta:{name:'pasta',unit:'g',category:'pasta',per100:{calories:360,protein:12,carbs:72,fat:2},pricePer100:1.2},chicken:{name:'chicken',unit:'g',category:'chicken',per100:{calories:165,protein:31,carbs:0,fat:4},pricePer100:6.5},eggs:{name:'eggs',unit:'piece',category:'eggs',per100:{calories:78,protein:6.3,carbs:.6,fat:5.3},pricePer100:2.5},skyr:{name:'skyr/yogurt',unit:'g',category:'skyr-yogurt',per100:{calories:65,protein:11,carbs:4,fat:.2},pricePer100:2.8},beans:{name:'beans/lentils',unit:'g',category:'beans',per100:{calories:120,protein:8,carbs:20,fat:1},pricePer100:1.8},veg:{name:'frozen vegetables',unit:'g',category:'vegetables',per100:{calories:45,protein:2,carbs:8,fat:.5},pricePer100:2.0},whey:{name:'protein powder',unit:'g',category:'protein-powder',per100:{calories:390,protein:75,carbs:8,fat:7},pricePer100:15}
+};
+function generateLocalWeekPlan(data){
+  const people=clamp(Number(data.servings)||1,1,12);
+  const plan={id:uid(),createdAt:new Date().toISOString(),source:'local',name:`${data.store} ${data.weeklyBudget} kr week for ${people}`,store:data.store,budget:data.weeklyBudget,servings:people,settings:{...data,servings:people},days:[],notes:[],missingData:[]};
+  for(const day of WEEK_DAYS){const meals=[];for(const type of data.meals){meals.push(buildPlannerMeal(type,{...data,servings:people},day,meals.length))}plan.days.push({day,meals})}
+  const totals=buildShoppingList(plan); plan.shoppingList=totals.items; plan.totalCost=round(totals.cost,2); plan.costPerPerson=round(plan.totalCost/people,2); plan.exactPriceCoverage=totals.coverage;
+  if(plan.totalCost>data.weeklyBudget) plan.notes.push(`This plan is about ${round(plan.totalCost-data.weeklyBudget,2)} kr over the total budget for ${people} ${people===1?'person':'people'}. Per person it is about ${round(plan.costPerPerson,2)} kr.`);
+  if(totals.missing.length) plan.missingData=[...new Set(totals.missing)].slice(0,8);
+  if(!plan.notes.length) plan.notes.push(`Ingredients are reused across days and scaled for ${people} ${people===1?'person':'people'}. Macros are shown per person.`);
+  return normalizeWeekPlan(plan,data);
+}
+function buildPlannerMeal(type,data,day,index){
+  const vegan=data.rules.includes('vegan')||data.plannerStyle==='vegan'; const cheap=data.plannerStyle==='cheap'||data.weeklyBudget<=250; const highCal=data.plannerStyle==='high-calorie'; const highProtein=data.plannerStyle==='high-protein'||highCal;
+  let defs=[]; let name=''; let instructions=['Prep once if possible and reuse leftovers.'];
+  if(type==='breakfast'){name=highCal?'Oats bulk bowl':'Oats breakfast'; defs=[['oats',90],['milk',300],['banana',120], ...(highCal?[['pb',30]]:[])]; if(vegan) defs=[['oats',90],['banana',120],['pb',25]]; instructions=['Mix oats with milk/yogurt or water. Add banana and peanut butter.']}
+  if(type==='lunch'){name=data.tools.includes('no-cook')?'Portable bulk lunch':'Rice protein box'; defs=vegan?[['rice',110],['beans',250],['veg',150]]:cheap?[['rice',120],['eggs',2],['veg',150]]:[['rice',120],['chicken',180],['veg',150]]; instructions=['Cook a larger batch and box it for school/work.']}
+  if(type==='dinner'){name=data.tools.includes('airfryer')?'Airfryer protein dinner':'Simple dinner bowl'; defs=vegan?[['pasta',120],['beans',250],['veg',200]]:[['pasta',120],['chicken',200],['veg',200]]; instructions=[data.tools.includes('airfryer')?'Airfry protein, cook carb, add vegetables.':'Cook carb and protein on stove. Add vegetables.']}
+  if(type==='snack'){name=highProtein?'Skyr protein snack':'Cheap calorie snack'; defs=vegan?[['banana',120],['pb',30]]:[['skyr',250],['banana',120]]; instructions=['Eat between meals so the dinner gap is not too big.']}
+  if(type==='shake'){name='Default bulk shake'; defs=vegan?[['oats',80],['banana',120],['pb',35]]:[['milk',500],['oats',80],['banana',120],['pb',25], ...(highProtein?[['whey',30]]:[])]; instructions=['Blend everything. Add water if too thick.']}
+  const people=clamp(Number(data.servings)||1,1,12);
+  const meal={id:uid(),type,name,servings:people,ingredients:[],instructions,calories:0,protein:0,carbs:0,fat:0,cost:0,costPerServing:0,usedProducts:[],missingData:[]};
+  for(const [key,amount] of defs) addPlannerIngredient(meal,key,amount,data.store,people);
+  for(const k of ['calories','protein','carbs','fat','cost']) meal[k]=round(meal[k],k==='cost'?2:0);
+  meal.costPerServing=round(meal.cost/people,2);
+  return meal;
+}
+function plannerProductByKey(key,store){
+  const category=FALLBACK_PRODUCTS[key]?.category || key;
+  const products=(state.products||[]).map(p=>sanitizeProduct(p)).filter(p=>(p.category||inferProductCategory(p.name))===category && !isProductIncomplete(p));
+  const same=products.filter(p=>String(p.retailer||'').toLowerCase().includes(String(store||'').toLowerCase()) && pricePer100(p)>0).sort(priceSort)[0];
+  if(same) return same;
+  const priced=products.filter(p=>pricePer100(p)>0).sort(priceSort)[0]; if(priced) return priced;
+  return products.sort(productSort)[0] || null;
+}
+function addPlannerIngredient(meal,key,amountPerServing,store,servings=1){
+  const people=clamp(Number(servings)||1,1,12);
+  const saved=plannerProductByKey(key,store); const fb=FALLBACK_PRODUCTS[key]||FALLBACK_PRODUCTS.oats; const p=saved||fb;
+  const unit=p.unit||fb.unit||'g'; const per=p.per100||fb.per100; const isPiece=unit==='piece'; const factorPerPerson=isPiece?amountPerServing:amountPerServing/100; const totalAmount=round(amountPerServing*people);
+  meal.ingredients.push({name:p.name||fb.name,amount:totalAmount,amountPerServing,servings:people,unit,productId:saved?.id||'',category:fb.category,exact:!!saved,missingPrice:!saved||!pricePer100(saved),missingNutrition:!saved&&true});
+  // Macros shown in the meal card are per person/serving, while shopping list amounts and costs are total for everyone.
+  meal.calories+=Number(per.calories||0)*factorPerPerson; meal.protein+=Number(per.protein||0)*factorPerPerson; meal.carbs+=Number(per.carbs||0)*factorPerPerson; meal.fat+=Number(per.fat||0)*factorPerPerson;
+  const price=saved?pricePer100(saved):Number(fb.pricePer100||0); if(price) meal.cost+=price*totalAmount/100;
+  if(saved) meal.usedProducts.push(saved.id); else meal.missingData.push(`Scan exact ${fb.name} for ${store}`);
+  if(saved && !pricePer100(saved)) meal.missingData.push(`Add price for ${saved.name}`);
+}
+function buildShoppingList(plan){
+  const map=new Map(); let cost=0, exactUnits=0, allUnits=0; const missing=[];
+  for(const d of plan.days||[]) for(const m of d.meals||[]) for(const ing of m.ingredients||[]){
+    const key=ing.productId || `${ing.name}|${ing.unit}`; const row=map.get(key)||{name:ing.name,amount:0,unit:ing.unit,estimatedCost:0,productId:ing.productId||'',missingPrice:false,missingNutrition:false,usedIn:[]};
+    row.amount+=Number(ing.amount)||0; row.usedIn.push(`${d.day} ${m.type}`);
+    const prod=ing.productId?findProduct(ing.productId):null; const price=prod?pricePer100(prod):(FALLBACK_PRODUCTS[ing.category]?.pricePer100||0);
+    row.estimatedCost+=price*(Number(ing.amount)||0)/100; row.missingPrice=!prod||!pricePer100(prod); row.missingNutrition=!prod||isProductIncomplete(prod);
+    if(row.missingPrice) missing.push(`Price for ${ing.name}`); if(row.missingNutrition) missing.push(`Nutrition for ${ing.name}`);
+    cost+=price*(Number(ing.amount)||0)/100; allUnits++; if(prod&&pricePer100(prod)&&!isProductIncomplete(prod)) exactUnits++;
+    map.set(key,row);
+  }
+  return {items:[...map.values()].map(x=>({...x,amount:round(x.amount),estimatedCost:round(x.estimatedCost,2),usedIn:[...new Set(x.usedIn)].slice(0,5)})),cost,coverage:allUnits?round(exactUnits/allUnits*100):0,missing};
+}
+function normalizeWeekPlan(plan,data={}){plan.id=plan.id||uid();plan.createdAt=plan.createdAt||new Date().toISOString();plan.store=plan.store||data.store||'Netto';plan.budget=Number(plan.budget||data.weeklyBudget||0);plan.servings=clamp(Number(plan.servings||data.servings||plan.settings?.servings||1),1,12);plan.settings={...(plan.settings||data||{}),servings:plan.servings};plan.days=(plan.days||[]).slice(0,7).map(d=>({...d,meals:(d.meals||[]).map(m=>({...m,servings:m.servings||plan.servings,costPerServing:round(Number(m.costPerServing)||Number(m.cost||0)/plan.servings,2)}))}));plan.shoppingList=plan.shoppingList||buildShoppingList(plan).items;plan.totalCost=round(Number(plan.totalCost)||plan.shoppingList.reduce((s,i)=>s+Number(i.estimatedCost||0),0),2);plan.costPerPerson=round(Number(plan.costPerPerson)||plan.totalCost/plan.servings,2);plan.exactPriceCoverage=round(Number(plan.exactPriceCoverage)||0);plan.notes=Array.isArray(plan.notes)?plan.notes:[String(plan.notes||'')].filter(Boolean);plan.missingData=[...new Set(plan.missingData||[])];return plan}
+function weeklyPlanCardHTML(plan,inSheet=false){
+  const over=Number(plan.totalCost)>Number(plan.budget); const days=(plan.days||[]).map(dayPlanHTML).join('');
+  return `<div class="stack"><div class="card card-pad"><div class="row between"><div><p class="eyebrow">${escapeHTML(plan.store)} weekly plan · ${plan.servings||1} ${(plan.servings||1)===1?'person':'people'}</p><h3>${escapeHTML(plan.name||'Meal plan')}</h3></div><span class="pill ${over?'warn':'good'}">${round(plan.totalCost,2)} / ${round(plan.budget,2)} kr</span></div><div class="product-stats"><div><strong>${round(plan.exactPriceCoverage||0)}%</strong><span>exact price/nutrition</span></div><div><strong>${(plan.days||[]).reduce((s,d)=>s+(d.meals||[]).length,0)}</strong><span>meals</span></div><div><strong>${(plan.shoppingList||[]).length}</strong><span>items</span></div><div><strong>${round(plan.costPerPerson||0,2)} kr</strong><span>per person</span></div></div>${(plan.notes||[]).length?`<p class="subtle">${escapeHTML(plan.notes.join(' '))}</p>`:''}${(plan.missingData||[]).length?`<div class="missing-box"><strong>Missing exact data</strong><p class="subtle">${escapeHTML(plan.missingData.slice(0,5).join(', '))}. Scan product label/receipt so next plan becomes 1:1.</p><button class="secondary full" data-action="scan-food">Scan product data</button></div>`:''}</div><div class="section-title"><div><p class="eyebrow">Shopping list</p><h3>One combined list</h3></div><button class="link-button" data-action="scan-price-label">Add real prices</button></div>${shoppingListHTML(plan)}<div class="section-title"><div><p class="eyebrow">7 days</p><h3>Meals</h3></div></div>${days}</div>`;
+}
+function dayPlanHTML(d){return `<div class="plan-day card"><h3>${escapeHTML(d.day)}</h3><div class="plan-meals">${(d.meals||[]).map(m=>planMealHTML(d.day,m)).join('')}</div></div>`}
+function planMealHTML(day,m){const people=m.servings||state.activeMealPlan?.servings||1;return `<div class="plan-meal"><div><strong>${escapeHTML(m.name)}</strong><small>${escapeHTML(cap(m.type))} · ${round(m.calories)} kcal/person · ${round(m.protein)}g protein/person · ${round(m.cost,2)} kr total${people>1?` · ${people} people`:''}</small></div><div class="row"><button class="icon-button" data-action="log-plan-meal" data-day="${escapeHTML(day)}" data-id="${m.id}">+</button><button class="icon-button" data-action="swap-plan-meal" data-day="${escapeHTML(day)}" data-id="${m.id}">↻</button></div></div>`}
+function shoppingListHTML(plan){const people=plan.servings||1;return `<div class="shopping-list card"><div class="shop-row muted-row"><div><strong>Shopping list total</strong><small>Scaled for ${people} ${people===1?'person':'people'} · about ${round((plan.totalCost||0)/(people||1),2)} kr per person</small></div></div>${(plan.shoppingList||[]).map(i=>`<div class="shop-row"><div><strong>${escapeHTML(i.name)}</strong><small>${round(i.amount)} ${escapeHTML(i.unit)} total · ${round(i.estimatedCost,2)} kr · used ${i.usedIn?.length||0}×</small></div><span class="pill ${i.missingPrice||i.missingNutrition?'warn':'good'}">${i.missingPrice||i.missingNutrition?'scan':'exact'}</span></div>`).join('')||'<div class="empty">No shopping items.</div>'}</div>`}
+function findPlanMeal(plan,mealId){for(const d of plan.days||[]){const m=(d.meals||[]).find(x=>x.id===mealId);if(m)return{day:d,meal:m}}return null}
+function planMealToFood(m){return normalizeFood({id:uid(),type:m.type==='shake'?'shake':'meal',source:'meal-plan',name:m.name,summary:'From weekly meal plan',calories:m.calories,protein:m.protein,carbs:m.carbs,fat:m.fat,ingredients:m.ingredients||[],instructions:m.instructions||[],usedProducts:[...new Set((m.ingredients||[]).map(i=>i.productId).filter(Boolean))],shoppingNote:`Logged as one serving from a plan for ${m.servings||state.activeMealPlan?.servings||1} ${(m.servings||state.activeMealPlan?.servings||1)===1?'person':'people'}. Total dish cost was about ${round(m.cost,2)} kr.`})}
+function logPlanMeal(id){const found=findPlanMeal(state.activeMealPlan,id);if(!found){toast('Meal not found');return}addEntry(planMealToFood(found.meal));closeSheet()}
+async function swapPlanMeal(id){const found=findPlanMeal(state.activeMealPlan,id);if(!found){toast('Meal not found');return}const data=state.activeMealPlan.settings||{store:state.activeMealPlan.store,weeklyBudget:state.activeMealPlan.budget,plannerStyle:'cheap',rules:[],tools:[],meals:[]};const replacement=buildPlannerMeal(found.meal.type,data,found.day.day,0);replacement.name=`Swap: ${replacement.name}`;found.day.meals=found.day.meals.map(m=>m.id===id?replacement:m);const totals=buildShoppingList(state.activeMealPlan);state.activeMealPlan.shoppingList=totals.items;state.activeMealPlan.totalCost=round(totals.cost,2);state.activeMealPlan.exactPriceCoverage=totals.coverage;state.activeMealPlan.missingData=[...new Set([...(state.activeMealPlan.missingData||[]),...totals.missing])].slice(0,8);state.mealPlans=(state.mealPlans||[]).map(p=>p.id===state.activeMealPlan.id?state.activeMealPlan:p);await saveState();render();openSheet(state.activeMealPlan.name,'Meal swapped',weeklyPlanCardHTML(state.activeMealPlan,true));toast('Meal swapped')}
+function askPlan(){const plan=state.activeMealPlan;if(!plan)return;openCoach(`Help me improve this weekly meal plan for ${plan.store}. It feeds ${plan.servings||1} people. Total budget ${plan.budget} kr, current estimate ${plan.totalCost} kr, about ${round((plan.totalCost||0)/(plan.servings||1),2)} kr per person. Tell me what to scan or swap first.`)}
 function foodLogHTML() {
   return `<div class="card card-pad stack"><div><h3>Lazy log</h3><p class="subtle">Type what you ate normally. BulkMind estimates it and lets you confirm.</p></div><textarea id="lazyLogText" placeholder="Example: 2 eggs, 3 pieces of toast, milk and a chicken wrap"></textarea><button class="primary full" data-action="lazy-log">Estimate and add</button></div><div class="quick-grid tight"><button class="quick-action" data-action="scan-food"><span class="icon">▣</span><strong>Scan product</strong><small>Barcode, API or label photo</small></button><button class="quick-action" data-action="manual-log"><span class="icon">123</span><strong>Manual macros</strong><small>Enter exact numbers</small></button></div>`;
 }
@@ -291,6 +425,131 @@ function productLibraryHTML() {
   const preferred=products.filter(p=>p.preferredForShakes).length;
   return `<div class="card card-pad stack"><div><h3>Product Memory</h3><p class="subtle">Scan once, then BulkMind remembers it. Saved milk, protein powder, skyr and cheap products are used automatically when generating shakes and meals.</p></div><div class="product-stats"><div><strong>${products.length}</strong><span>saved</span></div><div><strong>${preferred}</strong><span>preferred</span></div><div><strong>${missing}</strong><span>need label</span></div></div><button class="primary full" data-action="scan-food">Add product by scan/API</button></div>${products.length?`<div class="stack">${products.map(productCardHTML).join('')}</div>`:`<div class="empty card">No products saved yet. Add your actual milk or protein powder so BulkMind stops guessing. After saving, the shake maker can reuse your normal products automatically.</div>`}`;
 }
+
+function pricePlannerHTML() {
+  const products = (state.products || []).map(p => sanitizeProduct(p));
+  const priced = products.filter(p => pricePer100(p) > 0);
+  const missing = products.filter(p => !pricePer100(p)).length;
+  const best = bestPriceByCategory();
+  const weekly = estimateWeeklyBasket(products);
+  return `<div class="card card-pad stack"><div><p class="eyebrow">Denmark price planner</p><h3>Real prices for your bulk</h3><p class="subtle">Save the exact product + exact price once. Then BulkMind uses your actual milk, whey, rice, skyr etc. in meals and compares cost next time.</p></div><div class="product-stats"><div><strong>${priced.length}</strong><span>priced</span></div><div><strong>${missing}</strong><span>need price</span></div><div><strong>${weekly ? `${weekly} kr` : '—'}</strong><span>sample day</span></div></div><div class="quick-grid tight"><button class="quick-action" data-action="scan-price-label"><span class="icon">🧾</span><strong>Scan receipt/price</strong><small>Gemini extracts real Danish prices</small></button><button class="quick-action" data-action="manual-price"><span class="icon">kr</span><strong>Add price</strong><small>Exact package price</small></button><button class="quick-action" data-action="open-salling-search"><span class="icon">S</span><strong>Salling lookup</strong><small>Netto/Føtex/Bilka API key</small></button><button class="quick-action" data-action="find-cheaper-products"><span class="icon">↘</span><strong>Find swaps</strong><small>Cheaper per protein/kcal</small></button></div><p class="privacy-note">1:1 prices only work from sources you give the app: a saved receipt/price label, manual package price, or a retailer API key.</p></div>
+  ${priceWarningsHTML()}
+  <div class="section-title"><div><p class="eyebrow">Best saved buys</p><h3>Use these by default</h3></div></div>${Object.keys(best).length ? `<div class="stack">${Object.entries(best).map(([cat,p])=>priceBestCardHTML(cat,p)).join('')}</div>` : `<div class="empty card">No priced products yet. Scan a receipt/price label or add package prices manually.</div>`}
+  <div class="section-title"><div><p class="eyebrow">All product prices</p><h3>Cost database</h3></div></div>${products.length ? `<div class="stack">${products.sort((a,b)=>priceSort(a,b)).map(priceProductRowHTML).join('')}</div>` : `<div class="empty card">Your product memory is empty. Add milk, whey, oats, skyr, rice and chicken first.</div>`}`;
+}
+function priceWarningsHTML(){
+  const incomplete=(state.products||[]).filter(p=>isProductIncomplete(p));
+  const noPrice=(state.products||[]).filter(p=>!pricePer100(p));
+  const a=[];
+  if(incomplete.length) a.push(`<div class="missing-box"><strong>Nutrition missing</strong><p class="subtle">${escapeHTML(incomplete.slice(0,3).map(p=>p.name).join(', '))} need a nutrition label before BulkMind can calculate cost per protein/kcal properly.</p><button class="secondary full" data-action="scan-label">Send nutrition label photo</button></div>`);
+  if(noPrice.length) a.push(`<div class="shopping-note"><strong>Prices missing</strong><p>${escapeHTML(noPrice.slice(0,3).map(p=>p.name).join(', '))} need package price + package size. After that the app can compare cheap/better swaps.</p></div>`);
+  return a.join('');
+}
+function priceBestCardHTML(category, p){
+  const costProtein=costPerProtein(p); const costKcal=costPer1000kcal(p);
+  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(cap(category))}</strong><span>${escapeHTML(p.name)}${p.retailer?` · ${escapeHTML(p.retailer)}`:''}</span></div><span class="pill good">Best saved</span></div><div class="food-macros"><div><strong>${round(pricePer100(p),2)}</strong><span>kr/100${escapeHTML(p.unit)}</span></div><div><strong>${costProtein ? round(costProtein,2) : '—'}</strong><span>kr/10g protein</span></div><div><strong>${costKcal ? round(costKcal,2) : '—'}</strong><span>kr/1000 kcal</span></div><div><strong>${p.usageCount||0}</strong><span>uses</span></div></div><div class="food-actions"><button class="primary" data-action="prefer-product" data-id="${p.id}">Use by default</button><button class="secondary" data-action="manual-price" data-id="${p.id}">Update price</button></div></article>`;
+}
+function priceProductRowHTML(p){
+  const price=pricePer100(p); const proteinCost=costPerProtein(p); const kcalCost=costPer1000kcal(p);
+  const source=p.priceSource?` · ${p.priceSource}`:''; const checked=p.lastPriceCheck?` · checked ${new Date(p.lastPriceCheck).toLocaleDateString()}`:'';
+  return `<article class="food-card card compact-price"><div class="food-top"><div class="food-title"><strong>${escapeHTML(p.name)}</strong><span>${escapeHTML(p.brand||p.category||'Product')}${escapeHTML(source)}${escapeHTML(checked)}</span></div><span class="pill ${price?'good':'warn'}">${price?`${round(price,2)} kr/100${escapeHTML(p.unit)}`:'Need price'}</span></div><div class="product-memory"><span>${proteinCost?`${round(proteinCost,2)} kr/10g protein`:'protein cost —'}</span><span>${kcalCost?`${round(kcalCost,2)} kr/1000 kcal`:'kcal cost —'}</span><span>${p.retailer?escapeHTML(p.retailer):'No store'}</span></div><div class="food-actions"><button class="secondary" data-action="manual-price" data-id="${p.id}">Set price</button><button class="secondary" data-action="ask-product" data-id="${p.id}">Ask AI compare</button></div></article>`;
+}
+function bestPriceByCategory(){
+  const out={};
+  for(const p of (state.products||[]).map(x=>sanitizeProduct(x)).filter(p=>pricePer100(p)>0 && !isProductIncomplete(p))){
+    const cat=p.category||inferProductCategory(p.name); const score=priceScore(p);
+    if(!out[cat] || score<priceScore(out[cat])) out[cat]=p;
+  }
+  return out;
+}
+function priceScore(p){
+  const cat=p.category||inferProductCategory(p.name);
+  if(['protein-powder','skyr-yogurt','chicken','eggs'].includes(cat)) return costPerProtein(p) || 9999;
+  return costPer1000kcal(p) || pricePer100(p) || 9999;
+}
+function priceSort(a,b){return (pricePer100(a)?0:1)-(pricePer100(b)?0:1) || priceScore(a)-priceScore(b)}
+function costPerProtein(p){const protein=Number(p.per100?.protein||0); const price=pricePer100(p); return protein>0&&price>0 ? price/protein*10 : 0}
+function costPer1000kcal(p){const kcal=Number(p.per100?.calories||0); const price=pricePer100(p); return kcal>0&&price>0 ? price/kcal*1000 : 0}
+function estimateWeeklyBasket(products){
+  const by=bestPriceByCategory();
+  const milk=by.milk, oats=by.oats, pb=by['peanut-butter'], protein=by['protein-powder']||by['skyr-yogurt'];
+  const sample=[milk&&{p:milk,amount:500}, oats&&{p:oats,amount:80}, pb&&{p:pb,amount:30}, protein&&{p:protein,amount:protein.category==='protein-powder'?30:200}].filter(Boolean);
+  const day=sample.reduce((s,x)=>s+pricePer100(x.p)*x.amount/100,0);
+  return day?round(day):0;
+}
+function openManualPrice(id=''){
+  const p=id?findProduct(id):null;
+  const productOptions=(state.products||[]).map(x=>`<option value="${x.id}" ${p?.id===x.id?'selected':''}>${escapeHTML(x.name)}${x.brand?` — ${escapeHTML(x.brand)}`:''}</option>`).join('');
+  openSheet('Add exact Danish price','Package price',`<form id="manualPriceForm" class="sheet-form"><div class="card card-pad"><h3>Use the real shelf/receipt price</h3><p class="subtle">Example: sødmælk 1 liter costs 13.95 kr → price 13.95, package size 1000 ml. This makes the planner 1:1 for the products you actually buy.</p></div><div class="field full"><label for="priceProductId">Product</label><select id="priceProductId" name="priceProductId">${productOptions}</select></div>${field('pricePackage','Package price (kr)','number',p?.pricePackage||'','Example: 13.95','full')}${field('packageAmount',`Package size (${p?.unit||'g/ml'})`,'number',p?.packageAmount||'','Example: 1000','full')}${field('retailer','Store','text',p?.retailer||'','Example: Netto, REMA 1000, Føtex','full')}${field('priceSource','Source','text',p?.priceSource||'manual','manual, receipt, shelf label, Salling API','full')}<div class="form-actions"><button type="button" class="primary full" data-action="save-manual-price">Save price</button></div></form>`);
+}
+async function saveManualPrice(){
+  const data=Object.fromEntries(new FormData($('#manualPriceForm'))); const p=findProduct(data.priceProductId); if(!p){toast('Choose a product first');return}
+  p.pricePackage=Number(data.pricePackage)||0; p.packageAmount=Number(data.packageAmount)||p.packageAmount||0; p.retailer=data.retailer||p.retailer||''; p.priceSource=data.priceSource||'manual'; p.lastPriceCheck=new Date().toISOString(); p.pricePer100=pricePer100(p);
+  await saveState(); closeSheet(); state.ui.foodSegment='prices'; render(); toast('Price saved');
+}
+function openPriceLabelScan(){
+  openSheet('Scan receipt or price label','Gemini price OCR',`<div class="stack"><div class="card card-pad"><h3>Make prices real</h3><p class="subtle">Take a photo of a receipt or shelf label. Gemini extracts product names, package sizes and prices. You confirm before saving.</p></div><input id="pricePhoto" class="input" type="file" accept="image/*" capture="environment"><button class="primary full" data-action="process-price-label">Extract prices</button><button class="secondary full" data-action="manual-price">Type price manually</button></div>`);
+}
+async function processPriceLabelPhoto(){
+  const file=$('#pricePhoto')?.files?.[0]; if(!file){toast('Choose a photo first');return} if(!state.settings.geminiKey){toast('Add Gemini key first');return}
+  openSheet('Reading prices','Gemini vision',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Looking for Danish product prices, package size and store names…</p></div></div>`);
+  try{
+    const prompt='Read this Danish grocery receipt or shelf price label. Return ONLY JSON: {"items":[{"name":"product name","brand":"brand if visible","retailer":"store if visible","pricePackage":number,"packageAmount":number,"unit":"g or ml","priceSource":"receipt/photo","confidence":"low/medium/high"}]}. Extract normal DKK price, not pant/deposit. If package size is 1 liter use 1000 ml. If 1 kg use 1000 g. If unsure, still return best estimate with low confidence.';
+    const data=await geminiVisionRequest(prompt,file,true); const items=(data.items||[]).map(priceCandidateFromOCR).filter(Boolean);
+    window.__bulkPriceCandidates=items;
+    openSheet('Confirm extracted prices','Save to product memory',`<div class="stack">${items.length?items.map(priceCandidateHTML).join(''):'<div class="empty card">No prices found. Try a clearer photo or type manually.</div>'}<button class="secondary full" data-action="manual-price">Type manually instead</button></div>`);
+  }catch(err){console.error(err);openSheet('Could not read prices','Try again',`<div class="card card-pad"><p class="subtle">Gemini could not extract prices clearly. Try a close-up photo of the receipt or shelf label.</p></div><button class="primary full" data-action="scan-price-label">Try another photo</button><button class="secondary full" data-action="manual-price">Add manually</button>`)}
+}
+function priceCandidateFromOCR(x){
+  if(!x?.name || !(Number(x.pricePackage)>0)) return null;
+  const unit=x.unit==='ml'?'ml':'g'; const existing=findClosestProduct(x.name, unit);
+  return {id:uid(),productId:existing?.id||'',name:x.name,brand:x.brand||'',retailer:x.retailer||'',pricePackage:Number(x.pricePackage)||0,packageAmount:Number(x.packageAmount)||0,unit,priceSource:x.priceSource||'price photo',confidence:x.confidence||'medium'};
+}
+function priceCandidateHTML(c){
+  const existing=c.productId?findProduct(c.productId):null;
+  const per100=c.packageAmount?round(c.pricePackage/c.packageAmount*100,2):'—';
+  return `<article class="food-card card"><div class="food-top"><div class="food-title"><strong>${escapeHTML(c.name)}</strong><span>${existing?`Matched: ${escapeHTML(existing.name)}`:'New product / no match'}${c.retailer?` · ${escapeHTML(c.retailer)}`:''}</span></div><span class="pill good">${escapeHTML(c.confidence)}</span></div><div class="product-memory"><span>${round(c.pricePackage,2)} kr/package</span><span>${c.packageAmount||'—'} ${escapeHTML(c.unit)}</span><span>${per100} kr/100${escapeHTML(c.unit)}</span></div><div class="food-actions"><button class="primary" data-action="apply-price-suggestion" data-id="${c.id}">Save this price</button></div></article>`;
+}
+function findClosestProduct(name,unit){
+  const words=String(name||'').toLowerCase().split(/\W+/).filter(w=>w.length>2);
+  return (state.products||[]).filter(p=>p.unit===unit).map(p=>({p,score:words.filter(w=>String(p.name).toLowerCase().includes(w)||String(p.brand).toLowerCase().includes(w)).length})).sort((a,b)=>b.score-a.score)[0]?.score? (state.products||[]).filter(p=>p.unit===unit).map(p=>({p,score:words.filter(w=>String(p.name).toLowerCase().includes(w)||String(p.brand).toLowerCase().includes(w)).length})).sort((a,b)=>b.score-a.score)[0].p : null;
+}
+window.__bulkPriceCandidates=[];
+function cachePriceCandidates(){ const cards=$$('.food-card'); return cards; }
+async function applyPriceSuggestion(id){
+  // Re-read the visible card is not reliable, so store latest candidates globally when rendering.
+  const c=(window.__bulkPriceCandidates||[]).find(x=>x.id===id); if(!c){toast('Price candidate expired. Scan again.');return}
+  let p=c.productId?findProduct(c.productId):null;
+  if(!p){ p=sanitizeProduct({id:uid(),type:'product',source:'price-photo',name:c.name,brand:c.brand,unit:c.unit,category:inferProductCategory(`${c.name} ${c.brand}`),defaultAmount:inferDefaultAmount(c.name,c.unit),per100:{calories:0,protein:0,carbs:0,fat:0}}); state.products.unshift(p); }
+  p.pricePackage=c.pricePackage; p.packageAmount=c.packageAmount; p.retailer=c.retailer; p.priceSource=c.priceSource; p.lastPriceCheck=new Date().toISOString(); p.pricePer100=pricePer100(p);
+  await saveState(); state.ui.foodSegment='prices'; render(); toast('Real price saved');
+}
+function findCheaperProducts(){
+  const groups=bestPriceByCategory();
+  const notes=Object.entries(groups).map(([cat,best])=>`${cap(cat)}: ${best.name} is your best saved option right now at ${round(pricePer100(best),2)} kr/100${best.unit}. ${costPerProtein(best)?`${round(costPerProtein(best),2)} kr per 10g protein.`:`${round(costPer1000kcal(best),2)} kr per 1000 kcal.`}`).join('\n');
+  openSheet('Cheapest saved swaps','Based on your product memory',`<div class="card card-pad"><p class="subtle">${escapeHTML(notes || 'Add prices first. Then this will tell you which milk, whey, skyr, oats etc. are actually cheapest for your bulk.')}</p></div><button class="primary full" data-action="scan-price-label">Scan more prices</button>`);
+}
+function openSallingSearch(){
+  openSheet('Salling lookup','Netto/Føtex/Bilka connector',`<form id="sallingForm" class="sheet-form"><div class="card card-pad"><h3>Real retailer API source</h3><p class="subtle">Use this only if you have a Salling Group developer API key. It can help with Salling-owned stores, but not REMA/Coop/Lidl unless those stores expose data or you scan prices yourself.</p></div>${field('sallingApiKey','Salling API key','password',state.settings.sallingApiKey||'','','full')}${field('sallingStoreId','Store ID / zip','text',state.settings.sallingStoreId||'','Optional','full')}${field('sallingQuery','Search product','text','sødmælk','Example: sødmælk, skyr, havregryn','full')}<div class="form-actions"><button type="button" class="primary full" data-action="run-salling-search">Search / test connector</button></div></form>`);
+}
+async function runSallingSearch(){
+  const data=Object.fromEntries(new FormData($('#sallingForm'))); state.settings.sallingApiKey=data.sallingApiKey||''; state.settings.sallingStoreId=data.sallingStoreId||''; await saveState();
+  openSheet('Testing Salling connector','Live API',`<div class="loading"><div><div class="spinner" style="margin:0 auto 14px"></div><p class="subtle">Trying to reach Salling Group APIs…</p></div></div>`);
+  try{
+    const result=await fetchSallingCandidate(data.sallingQuery);
+    openSheet('Salling result','Review before saving',`<div class="card card-pad"><h3>${escapeHTML(result.name)}</h3><p class="subtle">${escapeHTML(result.note)}</p></div><button class="primary full" data-action="manual-price">Save price manually from result</button>`);
+  }catch(err){console.warn(err);openSheet('Connector needs setup','Use scan/manual for now',`<div class="card card-pad"><h3>Could not get a usable price</h3><p class="subtle">The public Salling portal requires an API key and not every API can be called directly from a front-end app. For exact 1:1 prices today, scan a receipt/shelf label or type the package price. The app will still use those prices automatically afterwards.</p></div><button class="primary full" data-action="scan-price-label">Scan price instead</button><button class="secondary full" data-action="manual-price">Type price manually</button>`)}
+}
+async function fetchSallingCandidate(query){
+  const key=state.settings.sallingApiKey?.trim(); if(!key) throw new Error('No Salling key');
+  // Public Salling API access can depend on the app/key. This adapter is intentionally conservative.
+  const url=`https://api.sallinggroup.com/v1/product-suggestions/suggestions?query=${encodeURIComponent(query||'')}`;
+  const res=await fetch(url,{headers:{'Authorization':`Bearer ${key}`,'Accept':'application/json'}});
+  if(!res.ok) throw new Error(`Salling ${res.status}`);
+  const body=await res.json();
+  return {name:body?.[0]?.title || body?.suggestions?.[0]?.title || query, note:'API answered, but confirm current shelf price before saving.'};
+}
+
 function recentGeneratedHTML() {
   const foods=state.generatedFoods.slice(0,5);
   return foods.length?`<div class="stack">${foods.map(foodCardHTML).join('')}</div>`:`<div class="empty card">Your generated meals and shakes will appear here.</div>`;
@@ -362,7 +621,7 @@ async function handleClick(event) {
   const action=button.dataset.action;
   const actions={
     'start-onboarding':()=>startOnboarding(false),'use-demo':useDemo,'onboarding-back':onboardingBack,'onboarding-next':onboardingNext,'cancel-onboarding':cancelOnboarding,
-    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,'scan-food':openScanHub,'manual-barcode':openManualBarcode,'lookup-barcode':lookupBarcodeFromForm,'start-camera-scan':startBarcodeCamera,'scan-label':()=>openLabelScan(),'process-label-photo':processLabelPhoto,'manual-product':openManualProduct,'save-product-manual':saveManualProduct,'add-product-portion':()=>addProductPortion(button.dataset.id),'save-product-from-review':saveProductFromReview,'review-product':()=>reviewSavedProduct(button.dataset.id),'delete-product':()=>deleteProduct(button.dataset.id),'prefer-product':()=>togglePreferredProduct(button.dataset.id),'complete-product':()=>completeProductNutrition(button.dataset.id),'ask-product':()=>openProductCoach(button.dataset.id),
+    'switch-tab':()=>switchTab(button.dataset.tab),'open-settings':openSettings,'open-quick-log':openQuickLog,'smart-shake':()=>openGenerator('shake'),'smart-meal':()=>openGenerator('meal'),'open-coach':()=>openCoach(),'log-weight':openWeightLog,'open-dk-prices':()=>{state.ui.foodSegment='prices';saveState();render()},'open-weekly-planner':openWeeklyPlanner,'generate-week-plan':generateWeeklyPlan,'log-plan-meal':()=>logPlanMeal(button.dataset.id),'swap-plan-meal':()=>swapPlanMeal(button.dataset.id),'ask-plan':askPlan,'scan-food':openScanHub,'manual-barcode':openManualBarcode,'lookup-barcode':lookupBarcodeFromForm,'start-camera-scan':startBarcodeCamera,'scan-label':()=>openLabelScan(),'process-label-photo':processLabelPhoto,'manual-product':openManualProduct,'save-product-manual':saveManualProduct,'add-product-portion':()=>addProductPortion(button.dataset.id),'save-product-from-review':saveProductFromReview,'review-product':()=>reviewSavedProduct(button.dataset.id),'delete-product':()=>deleteProduct(button.dataset.id),'prefer-product':()=>togglePreferredProduct(button.dataset.id),'complete-product':()=>completeProductNutrition(button.dataset.id),'ask-product':()=>openProductCoach(button.dataset.id),'manual-price':()=>openManualPrice(button.dataset.id),'save-manual-price':saveManualPrice,'scan-price-label':openPriceLabelScan,'process-price-label':processPriceLabelPhoto,'find-cheaper-products':findCheaperProducts,'open-salling-search':openSallingSearch,'run-salling-search':runSallingSearch,'apply-price-suggestion':()=>applyPriceSuggestion(button.dataset.id),
     'food-segment':()=>{state.ui.foodSegment=button.dataset.segment;saveState();render()},'preset-generate':()=>openGenerator(button.dataset.preset),'lazy-log':lazyLog,'manual-log':openManualLog,
     'add-food':()=>{const f=findFood(button.dataset.id);if(f){addEntry(f);closeSheet()}},'save-food':()=>saveFood(button.dataset.id),'ask-food':()=>openFoodChat(button.dataset.id),'delete-generated':()=>deleteGenerated(button.dataset.id),
     'generate-workout':generateWorkoutPlan,'toggle-set':()=>toggleSet(button.dataset.ex,button.dataset.set),'finish-workout':finishWorkout,'weekly-checkin':openWeeklyCheckin,'edit-log':openEditLog,
@@ -486,7 +745,7 @@ function normalizeFood(food){for(const k of ['calories','protein','carbs','fat']
 async function generateWithGemini(data){
   const p=state.profile,t=getTargets(),g=currentGaps();
   const prompt=`You are the food engine inside BulkMind. Create ONE realistic ${data.mode==='shake'||data.mode==='low-volume'?'shake':'meal'} for this exact user.\nUser: ${JSON.stringify({age:p.age,height:p.height,currentWeight:p.currentWeight,targetWeight:p.targetWeight,goal:p.goalType,appetite:p.appetite,budget:p.budget,restrictions:p.restrictions,likedFoods:p.likedFoods,dislikedFoods:p.dislikedFoods,schedule:p.schedule})}
-Saved product memory with exact nutrition/history: ${JSON.stringify((state.products||[]).slice().sort(productSort).map(x=>({id:x.id,name:x.name,brand:x.brand,category:x.category,unit:x.unit,defaultAmount:x.defaultAmount,per100:x.per100,barcode:x.barcode,preferredForShakes:!!x.preferredForShakes,usageCount:x.usageCount||0,lastUsed:x.lastUsed||null,pricePer100:x.pricePer100||0,incomplete:isProductIncomplete(x)})).slice(0,30))}. Rules for product memory: use preferred/recently-used saved products by default for milk, protein powder, skyr/yogurt, oats and peanut butter. If a matching saved product has incomplete nutrition, do NOT invent exact macros for it; add it to missingProducts and ask the user to scan/send a nutrition label. If a cheaper saved alternative exists in the same category, include it in shoppingNote.\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"usedProducts":["saved product id if used"],"missingProducts":["product/category needing nutrition label"],"shoppingNote":"short note or blank","ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
+Saved product memory with exact nutrition/history and real saved Danish prices: ${JSON.stringify((state.products||[]).slice().sort(productSort).map(x=>({id:x.id,name:x.name,brand:x.brand,category:x.category,unit:x.unit,defaultAmount:x.defaultAmount,per100:x.per100,barcode:x.barcode,preferredForShakes:!!x.preferredForShakes,usageCount:x.usageCount||0,lastUsed:x.lastUsed||null,pricePer100:x.pricePer100||0,incomplete:isProductIncomplete(x)})).slice(0,30))}. Rules for product memory: use preferred/recently-used saved products by default for milk, protein powder, skyr/yogurt, oats and peanut butter. If a matching saved product has incomplete nutrition, do NOT invent exact macros for it; add it to missingProducts and ask the user to scan/send a nutrition label. If a cheaper saved alternative exists in the same category, include it in shoppingNote. Prioritize actual saved products/prices over generic ingredients. If price/nutrition is missing, ask for a label/receipt photo rather than inventing exact numbers.\nDaily targets: ${JSON.stringify(t)}\nCurrent gaps: ${JSON.stringify(g)}\nRequested target: ${data.targetCalories} kcal and ${data.targetProtein} g protein. Mode: ${data.mode}. Time: ${data.speed}. Available ingredients: ${data.ingredients||'not specified'}. Extra request: ${data.request||'none'}.\nReturn ONLY valid JSON with this shape: {"name":"","summary":"","calories":0,"protein":0,"carbs":0,"fat":0,"usedProducts":["saved product id if used"],"missingProducts":["product/category needing nutrition label"],"shoppingNote":"short note or blank","ingredients":[{"item":"","amount":""}],"instructions":[""],"timing":"","why":""}. Keep macros realistic, ingredient quantities precise, halal-friendly when relevant, and do not claim medical certainty.`;
   const json=await geminiRequest(prompt,true);const food=typeof json==='string'?JSON.parse(stripJSON(json)):json;const normalized=normalizeFood({id:uid(),type:data.mode==='shake'||data.mode==='low-volume'?'shake':'meal',source:'gemini',...food});normalized.usedProducts=(normalized.usedProducts||[]).filter(id=>findProduct(id));normalized.missingProducts=[...new Set([...(normalized.missingProducts||[]),...productsNeedingNutritionFor(JSON.stringify(normalized.ingredients||[]))])];if(!normalized.shoppingNote&&normalized.usedProducts?.length){const note=normalized.usedProducts.map(id=>betterProductSuggestion(findProduct(id))).filter(Boolean)[0];if(note) normalized.shoppingNote=note;}return normalized;
 }
 function stripJSON(text){return String(text).replace(/^```json\s*/i,'').replace(/```$/,'').trim()}
@@ -662,7 +921,7 @@ function inferDefaultAmount(name='',unit='g'){const s=String(name).toLowerCase()
 function sanitizeProduct(p){
   p.name=String(p.name||'Saved product').trim(); p.brand=String(p.brand||'').trim(); p.unit=p.unit==='ml'?'ml':'g'; p.category=p.category||inferProductCategory(`${p.name} ${p.brand}`); p.defaultAmount=clamp(Number(p.defaultAmount)||inferDefaultAmount(p.name,p.unit),1,2000);
   p.per100={calories:clamp(Number(p.per100?.calories)||0,0,900),protein:clamp(Number(p.per100?.protein)||0,0,100),carbs:clamp(Number(p.per100?.carbs)||0,0,100),fat:clamp(Number(p.per100?.fat)||0,0,100)};
-  p.packageAmount=clamp(Number(p.packageAmount)||0,0,100000); p.pricePackage=clamp(Number(p.pricePackage)||0,0,100000); p.pricePer100=pricePer100(p); p.usageCount=Number(p.usageCount||0); p.shakeUseCount=Number(p.shakeUseCount||0); p.preferredForShakes=!!p.preferredForShakes; p.lastUsed=p.lastUsed||null; p.notes=String(p.notes||'');
+  p.packageAmount=clamp(Number(p.packageAmount)||0,0,100000); p.pricePackage=clamp(Number(p.pricePackage)||0,0,100000); p.pricePer100=pricePer100(p); p.retailer=String(p.retailer||''); p.priceSource=String(p.priceSource||''); p.lastPriceCheck=p.lastPriceCheck||null; p.usageCount=Number(p.usageCount||0); p.shakeUseCount=Number(p.shakeUseCount||0); p.preferredForShakes=!!p.preferredForShakes; p.lastUsed=p.lastUsed||null; p.notes=String(p.notes||'');
   return p;
 }
 function reviewProduct(product,eyebrow='Review product'){
@@ -788,11 +1047,12 @@ function openWeeklyCheckin(){openSheet('Weekly check-in','Takes about 30 seconds
 async function submitCheckin(){const data=Object.fromEntries(new FormData($('#checkinForm')));const stats=progressStats();let advice=`Your main focus next week: `;if(data.appetite==='low')advice+='use one planned shake before the day gets late.';else if(stats.consistency<60)advice+='make logging and one repeatable breakfast automatic.';else advice+='keep the same calories and repeat what worked.';openSheet('Your next-week focus','Weekly summary',`<div class="insight card"><div class="insight-icon">✦</div><div><p>${escapeHTML(advice)}</p></div></div><div class="card card-pad"><p class="subtle">Average calories: ${stats.avgCalories}. Consistency: ${stats.consistency}%. ${escapeHTML(data.problem||'No specific problem added.')}</p></div><button class="primary full" data-action="open-coach">Discuss this with AI</button>`)}
 
 function openSettings(){openSheet('Settings','Personal and private',`<div class="stack">
-  <div class="card card-pad stack"><div><h3>Gemini AI</h3><p class="subtle">Required for fully custom AI answers. Without it, BulkMind uses its local generator.</p></div>${field('geminiKey','Gemini API key','password',state.settings.geminiKey,'Stored only in this app on this device.','full')}${field('geminiModel','Model','text',state.settings.geminiModel,'Default: gemini-2.5-flash-lite','full')}<button class="primary full" data-action="save-settings">Save AI settings</button></div>
+  <div class="card card-pad stack"><div><h3>Gemini AI</h3><p class="subtle">Required for fully custom AI answers and nutrition/price label OCR. Without it, BulkMind uses its local generator.</p></div>${field('geminiKey','Gemini API key','password',state.settings.geminiKey,'Stored only in this app on this device.','full')}${field('geminiModel','Model','text',state.settings.geminiModel,'Default: gemini-2.5-flash-lite','full')}<button class="primary full" data-action="save-settings">Save AI settings</button></div>
+  <div class="card card-pad stack"><div><h3>Danish price sources</h3><p class="subtle">Optional. Salling covers Salling-owned stores when your API access works. For all other stores, use receipt/shelf-label scan or manual package prices.</p></div>${selectField('defaultStore','Default grocery store',state.settings.defaultStore||'Netto',storeOptions())}${field('sallingApiKey','Salling API key','password',state.settings.sallingApiKey||'','Optional','full')}${field('sallingStoreId','Salling store ID / zip','text',state.settings.sallingStoreId||'','Optional','full')}<button class="secondary full" data-action="open-salling-search">Test Salling lookup</button></div>
   <div class="card card-pad stack"><h3>App</h3><button class="secondary full" data-action="toggle-theme">Switch to ${state.settings.theme==='dark'?'light':'dark'} mode</button><button class="secondary full" data-action="edit-targets">Nutrition targets</button><button class="secondary full" data-action="edit-profile">Edit profile</button><button class="secondary full" data-action="install-help">Add to iPhone Home Screen</button></div>
   <div class="card card-pad stack"><h3>Your data</h3><button class="secondary full" data-action="export-data">Export backup</button><input id="importFile" type="file" accept="application/json" class="hidden"><button class="secondary full" onclick="document.getElementById('importFile').click()">Import backup</button><button class="danger-button full" data-action="reset-app">Reset app</button></div>
-  <p class="privacy-note">BulkMind v9 · Data stored in IndexedDB on this device.</p></div>`)}
-async function saveSettings(){state.settings.geminiKey=$('#geminiKey')?.value.trim()||'';state.settings.geminiModel=$('#geminiModel')?.value.trim()||'gemini-2.5-flash-lite';await saveState();toast('AI settings saved');closeSheet()}
+  <p class="privacy-note">BulkMind v11 · Data stored in IndexedDB on this device.</p></div>`)}
+async function saveSettings(){state.settings.geminiKey=$('#geminiKey')?.value.trim()||'';state.settings.geminiModel=$('#geminiModel')?.value.trim()||'gemini-2.5-flash-lite';state.settings.sallingApiKey=$('#sallingApiKey')?.value.trim()||state.settings.sallingApiKey||'';state.settings.sallingStoreId=$('#sallingStoreId')?.value.trim()||state.settings.sallingStoreId||'';state.settings.defaultStore=$('#defaultStore')?.value||state.settings.defaultStore||'Netto';await saveState();toast('Settings saved');closeSheet()}
 async function toggleTheme(){state.settings.theme=state.settings.theme==='dark'?'light':'dark';applyTheme();await saveState();openSettings()}
 
 function targetPreviewHTML(targets, label='Current') {

@@ -31,3 +31,15 @@ Product scanning is now connected to the rest of the app:
 
 ## Privacy
 Data stays in your browser/iPhone storage unless you export it. Gemini requests are sent to Google only when you use AI features.
+
+
+## v12
+- Weekly planner now supports feeding multiple people.
+- Budget, shopping list and total cost scale for everyone.
+- Meal calories/macros remain per person so logging one serving stays correct.
+- Shopping list clearly shows total amounts and cost per person.
+
+## v11
+- Added Denmark weekly meal planner: store, equipment, diet rules, meals, budget and combined shopping list.
+- Uses Product Memory and saved exact prices first; missing price/nutrition is flagged for scanning.
+- Added meal swaps and one-tap logging from weekly plan.

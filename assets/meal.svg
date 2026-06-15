@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 420">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d7f8d0"/><stop offset="1" stop-color="#5fc785"/></linearGradient></defs>
+<rect width="600" height="420" rx="48" fill="url(#bg)"/>
+<circle cx="492" cy="92" r="58" fill="#fff" opacity=".25"/><circle cx="120" cy="98" r="36" fill="#fff" opacity=".24"/>
+<ellipse cx="300" cy="252" rx="185" ry="86" fill="#fff8ef" stroke="#1f2320" stroke-width="10"/>
+<ellipse cx="300" cy="238" rx="142" ry="52" fill="#efc77e"/>
+<circle cx="246" cy="230" r="28" fill="#f6f1e2" stroke="#1f2320" stroke-width="6"/>
+<circle cx="334" cy="219" r="34" fill="#d77448" stroke="#1f2320" stroke-width="6"/>
+<path d="M210 246c38-34 78 16 126-18s76 8 102 28" fill="none" stroke="#2f8e45" stroke-width="14" stroke-linecap="round"/>
+<path d="M153 149c34 38 74 38 121 0" fill="none" stroke="#1f2320" stroke-width="10" stroke-linecap="round" opacity=".4"/>
+<text x="300" y="65" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#1f2320">Meal plan</text>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 420">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f2e6ff"/><stop offset="1" stop-color="#9c6bff"/></linearGradient></defs>
+<rect width="600" height="420" rx="48" fill="url(#bg)"/>
+<path d="M126 226h348" stroke="#1f1830" stroke-width="18" stroke-linecap="round"/>
+<rect x="74" y="176" width="54" height="100" rx="15" fill="#fff" stroke="#1f1830" stroke-width="10"/>
+<rect x="132" y="158" width="62" height="136" rx="17" fill="#ffd36e" stroke="#1f1830" stroke-width="10"/>
+<rect x="406" y="158" width="62" height="136" rx="17" fill="#ffd36e" stroke="#1f1830" stroke-width="10"/>
+<rect x="472" y="176" width="54" height="100" rx="15" fill="#fff" stroke="#1f1830" stroke-width="10"/>
+<circle cx="300" cy="224" r="72" fill="#fff" opacity=".26"/>
+<text x="300" y="69" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#1f1830">Train</text>
+</svg>

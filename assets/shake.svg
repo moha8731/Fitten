@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 420">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe2b8"/><stop offset="1" stop-color="#ff8c66"/></linearGradient><linearGradient id="cup" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff9ef"/><stop offset="1" stop-color="#ffd6a3"/></linearGradient></defs>
+<rect width="600" height="420" rx="48" fill="url(#bg)"/>
+<circle cx="112" cy="90" r="38" fill="#ffffff" opacity=".25"/><circle cx="492" cy="82" r="64" fill="#fff" opacity=".2"/>
+<path d="M210 116h180l-24 218a38 38 0 0 1-38 34h-56a38 38 0 0 1-38-34z" fill="url(#cup)" stroke="#231f20" stroke-width="10"/>
+<path d="M222 170h156l-11 100H233z" fill="#aa6b43" opacity=".75"/>
+<path d="M194 106h212" stroke="#231f20" stroke-width="18" stroke-linecap="round"/>
+<path d="M352 92c20-54 44-66 77-74" stroke="#231f20" stroke-width="12" stroke-linecap="round" fill="none"/>
+<circle cx="162" cy="286" r="34" fill="#f5c242" stroke="#231f20" stroke-width="8"/><path d="M131 255c40 24 72 25 111 0" fill="none" stroke="#231f20" stroke-width="8" stroke-linecap="round" opacity=".35"/>
+<circle cx="446" cy="300" r="32" fill="#7cc96b" stroke="#231f20" stroke-width="8"/>
+<text x="300" y="62" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="800" fill="#231f20">Bulk shake</text>
+</svg>

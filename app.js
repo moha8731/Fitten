@@ -1,4 +1,4 @@
-const VERSION = 'v15-auth-key-support';
+const VERSION = 'v16-gemini-json-tool-fix';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
@@ -343,7 +343,34 @@ Rules: use realistic healthy calories, protein around 1.8-2.2g/kg current bodywe
     if(res.targets) state.targets = {...state.targets, ...res.targets};
     state.setupDone = true; state.todayNote = [res.summary,res.warning,(res.firstActions||[]).join(' · ')].filter(Boolean).join(' ');
     save(); closeModal(); render(); toast('AI plan created');
-  }catch(e){ toast('AI failed: '+e.message); $('#nextSetup').disabled=false; $('#nextSetup').textContent='Try again'; }
+  }catch(e){
+    const res = localBulkTargets(planDraft.profile);
+    state.profile = planDraft.profile; state.diet=planDraft.diet; state.equipment=planDraft.equipment; state.mealsWanted=planDraft.mealsWanted;
+    state.targets = {...state.targets, ...res.targets};
+    state.setupDone = true;
+    state.todayNote = [res.summary, res.warning, `AI had an issue, so I used the safe local calculator instead: ${e.message}`].filter(Boolean).join(' ');
+    save(); closeModal(); render(); toast('AI issue — safe local plan created');
+  }
+}
+
+function localBulkTargets(p){
+  const weight = num(p.weight,60), height = num(p.height,175), age = num(p.age,18);
+  const months = Math.max(1, num(p.months,8));
+  const target = num(p.targetWeight,84);
+  const weeklyGain = Math.max(0, (target - weight) / (months * 4.345));
+  const bmr = 10 * weight + 6.25 * height - 5 * age + 5;
+  const activityFactor = p.activity === 'high' ? 1.65 : p.activity === 'low' ? 1.35 : 1.5;
+  const maintenance = bmr * activityFactor;
+  const surplus = weeklyGain > 0.65 ? 650 : weeklyGain > 0.45 ? 500 : 350;
+  const calories = Math.round((maintenance + surplus) / 50) * 50;
+  const protein = Math.round(Math.max(110, Math.min(160, weight * 2.1)) / 5) * 5;
+  const fat = Math.round(Math.max(75, Math.min(110, weight * 1.35)) / 5) * 5;
+  const carbs = Math.max(250, Math.round((calories - protein*4 - fat*9) / 4 / 5) * 5);
+  return {
+    targets: { calories, protein, carbs, fat, weeklyGain: round(weeklyGain,2), source: 'safe local calculator v16' },
+    summary: `${weight} → ${target} kg in ${months} months needs about ${round(weeklyGain,2)} kg/week.`,
+    warning: weeklyGain > 0.6 ? 'That timeline is aggressive. The app will still plan it, but expect some fat gain and adjust every 2 weeks.' : ''
+  };
 }
 
 async function callGeminiText(prompt, useSearch=false){
@@ -351,20 +378,26 @@ async function callGeminiText(prompt, useSearch=false){
   return extractText(json);
 }
 async function callGeminiJSON(prompt, useSearch=false, imageData=null){
-  const parts = [{text: prompt}];
+  const jsonPrompt = `${prompt}
+
+IMPORTANT: Return only raw valid JSON. No markdown, no code block, no comments, no extra text.`;
+  const parts = [{text: jsonPrompt}];
   if(imageData) parts.push({inline_data:{mime_type:imageData.mime, data:imageData.data}});
   const json = await callGeminiRaw(parts, useSearch, true);
   const text = extractText(json);
   try { return JSON.parse(text); } catch(e){
-    const match = text.match(/\{[\s\S]*\}/);
-    if(match) return JSON.parse(match[0]);
-    throw new Error('AI did not return JSON');
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if(start !== -1 && end !== -1 && end > start) return JSON.parse(text.slice(start, end + 1));
+    throw new Error('AI did not return usable JSON');
   }
 }
 async function callGeminiRaw(parts, useSearch=false, wantJSON=false){
   if(!aiReady()) throw new Error('Gemini key missing');
   const body = { contents: [{ role:'user', parts }], generationConfig: { temperature: .55 } };
-  if(wantJSON) body.generationConfig.response_mime_type = 'application/json';
+  // Gemini currently rejects tool/search use together with response_mime_type: application/json.
+  // So JSON mode is used only when tools are OFF. With search ON, the prompt still forces raw JSON and we parse it manually.
+  if(wantJSON && !useSearch) body.generationConfig.response_mime_type = 'application/json';
   if(useSearch) body.tools = [{ google_search: {} }];
 
   // Best mode: hidden Vercel server key. This keeps the real API key out of GitHub and out of the browser.
@@ -404,7 +437,52 @@ Return JSON exactly:
 {"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["..."],"instructions":["..."],"why":"..."}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"reason":"used in 3 meals","needsPrice":false}],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
     const res = await callGeminiJSON(prompt, state.useSearch);
     state.plan = res; save(); render(); toast('Weekly plan ready');
-  }catch(e){ toast('Plan failed: '+e.message); btn.disabled=false; btn.textContent='Try again'; }
+  }catch(e){
+    state.plan = localWeeklyPlan({ error: e.message, focus: $('#focus')?.value || 'high calorie bulk' });
+    save(); render(); toast('Gemini issue — local weekly plan made');
+  }
+}
+
+function localWeeklyPlan(opts={}){
+  const people = Math.max(1, state.profile.people || 1);
+  const budget = state.profile.budget || 300;
+  const focus = opts.focus || 'high calorie bulk';
+  const wants = state.mealsWanted;
+  const baseMeals = {
+    breakfast:{slot:'breakfast',name:'Oats + milk + banana bowl',calories:720,protein:28,carbs:105,fat:20,price:13,ingredients:['100g oats','350ml milk','1 banana','15g peanut butter'],instructions:['Mix oats and milk','Add banana and peanut butter'],why:'Cheap calories and easy to repeat'},
+    lunch:{slot:'lunch',name:'Chicken rice box',calories:850,protein:55,carbs:105,fat:18,price:28,ingredients:['150g chicken','120g rice dry','frozen veg','sauce/spices'],instructions:['Cook rice','Cook chicken','Add veg and sauce'],why:'High protein and meal-prep friendly'},
+    dinner:{slot:'dinner',name:'Pasta tuna/chicken bulk dinner',calories:900,protein:50,carbs:115,fat:25,price:30,ingredients:['150g pasta','1 can tuna or chicken','tomato sauce','olive oil'],instructions:['Boil pasta','Add protein, sauce and oil'],why:'High calorie dinner with common ingredients'},
+    snacks:{slot:'snack',name:'Skyr + granola snack',calories:420,protein:32,carbs:45,fat:10,price:14,ingredients:['250g skyr','50g granola','honey'],instructions:['Mix and eat'],why:'Fast protein fix'},
+    shake:{slot:'shake',type:'shake',name:'Default bulk shake',calories:800,protein:42,carbs:95,fat:28,price:18,ingredients:['500ml milk','80g oats','1 banana','25g peanut butter','optional whey'],instructions:['Blend 45 seconds'],why:'Covers calorie gaps without cooking'}
+  };
+  const slots = Object.keys(baseMeals).filter(k => wants[k]);
+  const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day,i)=>({
+    day,
+    meals: slots.map(k => ({...baseMeals[k], name: i%2 && k==='dinner' ? 'Rice chicken bulk dinner' : baseMeals[k].name}))
+  }));
+  const oneDayPrice = slots.reduce((a,k)=>a+(baseMeals[k].price||0),0);
+  const totalPrice = Math.round(oneDayPrice * 7 * people);
+  const avgCalories = slots.reduce((a,k)=>a+(baseMeals[k].calories||0),0);
+  const avgProtein = slots.reduce((a,k)=>a+(baseMeals[k].protein||0),0);
+  const avgFat = slots.reduce((a,k)=>a+(baseMeals[k].fat||0),0);
+  return {
+    title: `Local ${focus} weekly plan`,
+    summary: `Gemini could not generate the plan, so BulkMind made a reusable plan from cheap Danish staples. ${opts.error ? 'AI issue: '+opts.error : ''}`,
+    totalPrice,
+    avgCalories, avgProtein, avgFat,
+    days,
+    shoppingList: [
+      {name:'Oats',amount:`${people*1} kg`,price:18*people,reason:'breakfast + shakes',needsPrice:false},
+      {name:'Milk',amount:`${people*7} L`,price:14*people*7,reason:'breakfast + shakes',needsPrice:false},
+      {name:'Bananas',amount:`${people*14} pcs`,price:22*people,reason:'breakfast + shakes',needsPrice:false},
+      {name:'Rice',amount:`${people*1.5} kg`,price:25*people,reason:'lunch boxes',needsPrice:false},
+      {name:'Chicken/tuna/protein source',amount:`${people*2.5} kg`,price:140*people,reason:'lunch + dinner protein',needsPrice:true},
+      {name:'Pasta',amount:`${people*1} kg`,price:15*people,reason:'dinners',needsPrice:false},
+      {name:'Skyr/granola',amount:`${people*2} packs`,price:45*people,reason:'snacks',needsPrice:true}
+    ],
+    missingData:['Scan your real chicken/skyr/protein prices to make this 1:1.'],
+    upgradeIdeas: totalPrice > budget ? ['Budget is tight: reduce snacks/shake extras or use more rice/oats/eggs.'] : ['Scan real store prices to find cheaper alternatives.']
+  };
 }
 
 async function quickShake(){

@@ -1,7 +1,7 @@
-# BulkMind v15
+# BulkMind v16
 
-- Updated Gemini setup to support both standard API keys and newer Google AI Studio authorization keys.
-- Removed misleading `AIza`-only messaging.
-- Vercel hidden key mode still uses `GEMINI_API_KEY`.
-- If AI Studio gives a key beginning with `AQ...`, paste it exactly as `GEMINI_API_KEY`.
-- Frontend still avoids hardcoding secrets; use Vercel Environment Variables for a fixed personal key.
+- Fixed Gemini 400 error: tool/search use is no longer combined with `response_mime_type: application/json`.
+- JSON prompts now force raw JSON and parse it safely when Google Search/tool mode is enabled.
+- Setup no longer gets stuck if Gemini fails; it falls back to a safe local bulking calculator.
+- Weekly planner no longer dead-ends on AI failure; it creates a local backup plan and explains what failed.
+- Updated service worker cache so iPhone gets the new build.

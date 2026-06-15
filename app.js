@@ -1,4 +1,4 @@
-const VERSION = 'v17-storage-resilience';
+const VERSION = 'v18-truthful-planner';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
@@ -26,7 +26,8 @@ function clone(obj){
   catch(e){ return JSON.parse(JSON.stringify(obj)); }
 }
 function safeId(){
-  return (crypto && crypto.randomUUID) ? safeId() : 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e) {}
+  return 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
 const defaults = {
@@ -108,6 +109,48 @@ function mealNameIcon(name=''){
   if(n.includes('wrap')) return '🌯';
   if(n.includes('chicken')||n.includes('kylling')) return '🍗';
   return '🍽️';
+}
+
+function selectedStoreStatus(){
+  const store = state.profile.store || 'Netto';
+  const salling = ['Netto','Føtex','Bilka'].includes(store);
+  const realPriced = (state.products||[]).filter(p => p.price && p.packageSize && (p.calories || p.protein));
+  const exactCount = realPriced.length;
+  return {
+    store,
+    salling,
+    exactCount,
+    status: exactCount ? `Using ${exactCount} saved real-price products` : 'No real product prices saved yet',
+    live: false,
+    text: salling
+      ? `${store} is a Salling Group store. BulkMind can only be truly live if you connect a real retailer API route/token. Right now it uses saved product prices + marked estimates.`
+      : `${store} has no verified live price connection in this app right now. It uses saved product prices + marked estimates.`
+  };
+}
+function priceTruth(plan){
+  const list = plan?.shoppingList || [];
+  const needs = list.filter(i => i.needsPrice || !i.price || String(i.priceSource||'').toLowerCase().includes('estimate')).length;
+  const real = list.length - needs;
+  if(!list.length) return {label:'No shopping list yet', cls:'warn', note:'Generate a plan first.'};
+  if(needs===0) return {label:'All items priced', cls:'', note:'This list is based on saved/API prices in the plan.'};
+  return {label:`${needs} items need price check`, cls:'warn', note:`${real} items have prices, ${needs} are estimates or missing. Scan/enter prices to make it 1:1.`};
+}
+function niceList(arr, empty='No details provided'){
+  if(!arr || !arr.length) return `<p class="tiny">${empty}</p>`;
+  return `<ul class="miniList">${arr.slice(0,8).map(x=>`<li>${esc(typeof x==='string'?x:(x.name||JSON.stringify(x)))}</li>`).join('')}</ul>`;
+}
+function planStepsCard(){
+  const st = selectedStoreStatus();
+  return `<section class="card guideCard">
+    <div class="row between"><div><div class="eyebrow">What actually happens</div><div class="h2">Pick rules → Gemini builds meals → you shop the list.</div></div><span class="status ${st.exactCount?'':'warn'}">${st.exactCount?'Real saved prices':'Needs prices'}</span></div>
+    <ol class="stepList">
+      <li><b>Choose store.</b> This controls shopping style. It is not fake-live. If no official price source is connected, prices are marked as estimates.</li>
+      <li><b>Set budget + people.</b> The shopping list scales for everyone, but macros stay per person.</li>
+      <li><b>Choose meals/equipment/diet.</b> The plan must follow your calories, protein, carbs and fat targets.</li>
+      <li><b>Generate plan.</b> The result shows every meal, ingredients, how to cook, total list, missing price data, and what to scan next.</li>
+    </ol>
+    <div class="truthBox"><b>${esc(st.store)} price status:</b><p class="p">${esc(st.text)}</p></div>
+  </section>`;
 }
 function dayLog(){ const d=todayISO(); return state.logs.filter(l=>l.date===d); }
 function totals(logs=dayLog()){
@@ -236,25 +279,31 @@ function productRow(p){
 
 function renderPlanner(){
   const p = state.profile;
+  const st = selectedStoreStatus();
+  const plan = state.plan;
+  const truth = priceTruth(plan);
   return `
   <div class="screenTitle">Plan</div>
-  <section class="card hero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Mise-style weekly planning</div><div class="h2">Pick store, budget, people. AI builds the week.</div><p class="p">Uses your macro targets: ${state.targets.calories} kcal · ${state.targets.protein}g protein · ${state.targets.fat}g fat per day.</p></div></section>
+  ${planStepsCard()}
+  <section class="card hero"><img src="assets/grocery.svg" alt="Grocery"><div class="heroBody"><div class="eyebrow">Weekly meal planner</div><div class="h2">Make a real shopping plan, not random meals.</div><p class="p">Targets used: <b>${state.targets.calories} kcal</b>, <b>${state.targets.protein}g protein</b>, <b>${state.targets.fat}g fat</b> per day. Budget is total for everyone.</p><div class="row wrap"><span class="pill">${esc(st.store)}</span><span class="pill">${p.budget} kr/week</span><span class="pill">${p.people} people</span><span class="status ${truth.cls}">${truth.label}</span></div></div></section>
   <section class="card" id="plannerForm">
+    <div class="h2">1. Shopping setup</div>
     <div class="grid2">
-      <div class="field"><label>Store</label><select id="store">${['Netto','Lidl','REMA 1000','Føtex','Bilka','Coop 365','Meny','Aldi/Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select></div>
-      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"></div>
+      <div class="field"><label>Store you will shop in</label><select id="store">${['Netto','Lidl','REMA 1000','Føtex','Bilka','Coop 365','Meny','Other'].map(s=>`<option ${p.store===s?'selected':''}>${s}</option>`).join('')}</select><p class="micro">Store choice is honest: no 1:1 prices unless you have saved product prices/API data.</p></div>
+      <div class="field"><label>Weekly budget total</label><input id="budget" inputmode="decimal" value="${p.budget}"><p class="micro">Example: 300 kr for 1 person, 600 kr for 2 people.</p></div>
       <div class="field"><label>People to feed</label><input id="people" inputmode="numeric" value="${p.people}"></div>
-      <div class="field"><label>Goal focus</label><select id="focus"><option>high calorie bulk</option><option>high protein</option><option>cheapest possible</option><option>balanced</option><option>low calorie</option><option>vegan</option><option>fruit/veg focus</option></select></div>
+      <div class="field"><label>Plan style</label><select id="focus"><option>high calorie bulk</option><option>high protein</option><option>cheapest possible</option><option>balanced</option><option>low calorie</option><option>vegan</option><option>fruit/veg focus</option></select></div>
     </div>
-    <div class="sectionHeader"><h2>Meals wanted</h2><span>tap to toggle</span></div>
+    <div class="sectionHeader"><h2>2. Meals wanted</h2><span>what days should contain</span></div>
     <div class="row wrap">${chipSet('mealsWanted', state.mealsWanted)}</div>
-    <div class="sectionHeader"><h2>Equipment</h2><span>what you can use</span></div>
+    <div class="sectionHeader"><h2>3. Equipment</h2><span>what you can cook with</span></div>
     <div class="row wrap">${chipSet('equipment', state.equipment)}</div>
-    <div class="sectionHeader"><h2>Dietary rules</h2><span>must follow</span></div>
+    <div class="sectionHeader"><h2>4. Dietary rules</h2><span>must follow</span></div>
     <div class="row wrap">${chipSet('diet', state.diet, 'green')}</div>
-    <div class="stickyAction"><button class="btn" id="generatePlan">Generate full week with Gemini</button></div>
+    <div class="truthBox" style="margin-top:14px"><b>Before you press generate:</b><p class="p">The app will create meals with ingredients, cooking steps and one combined shopping list. Items without reliable price data will be labeled <span class="kbd">scan</span>, not silently treated as real Netto/Lidl/REMA prices.</p></div>
+    <div class="stickyAction"><button class="btn" id="generatePlan">Generate meals + shopping list</button></div>
   </section>
-  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan generated yet</b><p class="p">This is where your 7-day meal plan + grocery list appears.</p></div>`}`;
+  ${state.plan ? renderPlan(state.plan) : `<div class="empty"><b>No plan generated yet</b><p class="p">After generation, your meals, ingredients, instructions and grocery list will appear here.</p></div>`}`;
 }
 function bindPlanner(){
   $all('[data-chip]').forEach(b=>b.addEventListener('click',()=>{ const [group,key]=b.dataset.chip.split('.'); state[group][key]=!state[group][key]; save(); render(); }));
@@ -265,20 +314,37 @@ function chipSet(group, obj, color=''){
   return Object.keys(obj).map(k=>`<button class="chip ${color} ${obj[k]?'active':''}" data-chip="${group}.${k}">${obj[k]?'✓':''} ${labels[k]||k}</button>`).join('');
 }
 function renderPlan(plan){
-  return `<section class="card">
-    <div class="row between"><div><div class="h2">${esc(plan.title||'Weekly plan')}</div><p class="p">${esc(plan.summary||'AI generated plan.')}</p></div><button class="btn small secondary" onclick="askAboutPlan()">Ask AI</button></div>
+  const truth = priceTruth(plan);
+  const missing = plan.missingData || plan.missingPriceData || [];
+  const upgrades = plan.upgradeIdeas || plan.shoppingNotes || [];
+  return `<section class="card planSummary">
+    <div class="row between"><div><div class="eyebrow">Generated result</div><div class="h2">${esc(plan.title||'Weekly plan')}</div><p class="p">${esc(plan.summary||'AI generated plan.')}</p></div><button class="btn small secondary" onclick="askAboutPlan()">Ask AI</button></div>
     <div class="metricGrid">${metric('Budget', Math.round(plan.totalPrice||0)+' kr', state.profile.budget+' kr', pct(plan.totalPrice||0,state.profile.budget))}${metric('Per person', Math.round((plan.totalPrice||0)/(state.profile.people||1))+' kr', 'week', 100)}${metric('Protein', Math.round(plan.avgProtein||0)+'g', state.targets.protein+'g', pct(plan.avgProtein||0,state.targets.protein))}</div>
+    <div class="truthBox ${truth.cls==='warn'?'warnBox':''}" style="margin-top:12px"><b>${esc(truth.label)}</b><p class="p">${esc(truth.note)}</p></div>
+    ${(missing.length||upgrades.length)?`<div class="grid2" style="margin-top:12px"><div class="item"><b>What still needs data</b>${niceList(missing,'Nothing missing')}</div><div class="item"><b>Better/cheaper ideas</b>${niceList(upgrades,'No upgrade ideas yet')}</div></div>`:''}
   </section>
-  <div class="sectionHeader"><h2>7 days</h2><span>tap meals to log</span></div>
-  <div class="dayGrid">${(plan.days||[]).map((d,idx)=>`<div class="dayCard"><div class="row between"><h3>${esc(d.day||'Day '+(idx+1))}</h3><button class="btn small secondary" onclick="swapDay(${idx})">Swap</button></div>${(d.meals||[]).map(m=>mealCard(m)).join('')}</div>`).join('')}</div>
-  <div class="sectionHeader"><h2>Shopping list</h2><span>${(plan.shoppingList||[]).length} items</span></div>
-  <section class="card">${(plan.shoppingList||[]).map(i=>`<div class="shoppingRow item"><div><b>${esc(i.name)}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'')} ${i.needsPrice?' · needs real price':''}</div></div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`).join('') || '<p class="p">No shopping list.</p>'}</section>`;
+  <div class="sectionHeader"><h2>7-day meals</h2><span>ingredients + cooking steps shown</span></div>
+  <div class="dayGrid">${(plan.days||[]).map((d,idx)=>`<div class="dayCard"><div class="row between"><h3>${esc(d.day||'Day '+(idx+1))}</h3><button class="btn small secondary" onclick="swapDay(${idx})">Swap day</button></div>${(d.meals||[]).map(m=>mealCard(m)).join('')}</div>`).join('')}</div>
+  <div class="sectionHeader"><h2>Shopping list</h2><span>${(plan.shoppingList||[]).length} items · for ${state.profile.people||1} people</span></div>
+  <section class="card shoppingList">
+    ${(plan.shoppingList||[]).map(i=>`<div class="shoppingRow item ${i.needsPrice?'needsPrice':''}"><div><b>${esc(i.name||i.storeItemName||'Item')}</b><div class="tiny">${esc(i.amount||'')} · ${esc(i.reason||'used in plan')}</div><div class="micro">Source: ${esc(i.priceSource || (i.needsPrice?'missing/scan':'AI/saved'))} · ${esc(i.confidence || (i.needsPrice?'needs check':'medium'))}</div></div><span class="pill">${i.price?round(i.price,2)+' kr':'scan'}</span></div>`).join('') || '<p class="p">No shopping list. Generate again or ask AI to fix the plan.</p>'}
+    <button class="btn secondary" style="margin-top:12px" onclick="openProductModal()">Scan / add missing product price</button>
+  </section>`;
 }
 function mealCard(m, saved=false){
   const type = m.type || m.slot || m.name || 'meal';
-  return `<div class="mealCard">
+  const ingredients = m.ingredients || m.items || [];
+  const instructions = m.instructions || m.steps || [];
+  return `<div class="mealCard detailedMeal">
     <img src="${imgFor(type)}" alt="${esc(type)}">
-    <div><h3>${mealNameIcon(m.name)} ${esc(m.name||'Meal')}</h3><div class="meta">${Math.round(m.calories||0)} kcal · ${Math.round(m.protein||0)}g protein · ${Math.round(m.fat||0)}g fat</div><div class="tiny">${esc(m.why||m.timing||'Built for your target')}</div><div class="row wrap" style="margin-top:8px"><button class="btn small secondary" onclick='addMealToToday(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Log</button><button class="btn small secondary" onclick='askAboutItem(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Ask AI</button>${saved?'':`<button class="btn small secondary" onclick='saveMeal(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Save</button>`}</div></div>
+    <div><h3>${mealNameIcon(m.name)} ${esc(m.name||'Meal')}</h3><div class="meta">${Math.round(m.calories||0)} kcal · ${Math.round(m.protein||0)}g protein · ${Math.round(m.carbs||0)}g carbs · ${Math.round(m.fat||0)}g fat ${m.price?'· '+round(m.price,2)+' kr':''}</div><div class="tiny">${esc(m.why||m.timing||'Built for your target')}</div></div>
+    <div class="mealDetails">
+      <b>Ingredients</b>${niceList(ingredients,'No ingredients returned — ask AI to fix this meal.')}
+      <b>How to make</b>${niceList(instructions,'No instructions returned — ask AI to add steps.')}
+      ${m.shoppingNote?`<div class="truthBox"><b>Shopping note</b><p class="p">${esc(m.shoppingNote)}</p></div>`:''}
+      ${(m.usedProducts||[]).length?`<div class="micro">Used saved products: ${esc(m.usedProducts.join(', '))}</div>`:''}
+      <div class="row wrap" style="margin-top:10px"><button class="btn small secondary" onclick='addMealToToday(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Log my portion</button><button class="btn small secondary" onclick='askAboutItem(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Ask AI</button>${saved?'':`<button class="btn small secondary" onclick='saveMeal(${JSON.stringify(m).replace(/'/g,"&#39;")})'>Save</button>`}</div>
+    </div>
   </div>`;
 }
 
@@ -453,14 +519,36 @@ async function generateWeeklyPlan(){
   state.profile.store = $('#store').value; state.profile.budget = num($('#budget').value, state.profile.budget); state.profile.people = Math.max(1, Math.min(12, num($('#people').value,1))); save();
   const btn=$('#generatePlan'); btn.innerHTML='<span class="loader"></span>Gemini planning'; btn.disabled=true;
   try{
-    const prompt = `Create a practical 7-day Danish grocery meal plan as JSON only. It must be extremely user-friendly and reuse ingredients across meals.
-Store: ${state.profile.store}. Weekly budget TOTAL for ${state.profile.people} people: ${state.profile.budget} DKK.
-User personal macro targets per day: ${JSON.stringify(state.targets)}. If multiple people, shopping list scales for all people, but meal macros are per person.
-Meals wanted: ${JSON.stringify(state.mealsWanted)}. Equipment: ${JSON.stringify(state.equipment)}. Dietary rules: ${JSON.stringify(state.diet)}. Goal focus: ${$('#focus').value}.
-Saved product memory with real prices/nutrition if any: ${JSON.stringify(state.products.slice(-30))}
-Need to follow protein/calories/fats from the initial target. If exact current store prices are uncertain, mark needsPrice true and use conservative Danish estimates. Do not invent unavailable products as guaranteed.
+    const storeStatus = selectedStoreStatus();
+    const prompt = `Create a practical 7-day Danish grocery meal plan as JSON only. This is a user-facing app, so the result must explain exactly what the user should eat, what ingredients go into every meal, how to cook it, and what to buy.
+
+HONEST PRICE RULES:
+- Selected store: ${state.profile.store}.
+- Do NOT claim live 1:1 ${state.profile.store} prices unless the exact item comes from saved product memory with price/package size or a clearly connected official API result.
+- If price is only a normal Danish estimate, set priceSource to "estimate" and needsPrice true when uncertain.
+- If price comes from saved product memory, set priceSource to "saved product memory" and needsPrice false.
+- If nutrition or price is missing, put it in missingData and mark the shoppingList item as needsPrice true.
+- Store status: ${JSON.stringify(storeStatus)}.
+
+USER PLAN:
+Weekly budget TOTAL for ${state.profile.people} people: ${state.profile.budget} DKK.
+User personal macro targets per day: ${JSON.stringify(state.targets)}.
+If multiple people, shopping list scales for all people, but meal macros are per person.
+Meals wanted: ${JSON.stringify(state.mealsWanted)}.
+Equipment: ${JSON.stringify(state.equipment)}.
+Dietary rules: ${JSON.stringify(state.diet)}.
+Goal focus: ${$('#focus').value}.
+Saved product memory with real prices/nutrition if any: ${JSON.stringify(state.products.slice(-50))}.
+
+NECESSARY UX REQUIREMENTS:
+- Every meal must have name, slot, calories, protein, carbs, fat, price, ingredients array, instructions array, why.
+- Reuse ingredients across meals to stay within budget.
+- Keep the plan realistic for Denmark and the selected store, but clearly label estimates.
+- Shopping list must combine quantities for the full week and all people.
+- Include missingData and upgradeIdeas.
+
 Return JSON exactly:
-{"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["..."],"instructions":["..."],"why":"..."}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"reason":"used in 3 meals","needsPrice":false}],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
+{"title":"...","summary":"...","totalPrice":295,"avgCalories":3100,"avgProtein":130,"avgFat":90,"days":[{"day":"Monday","meals":[{"slot":"breakfast","name":"...","calories":700,"protein":35,"carbs":80,"fat":20,"price":22,"ingredients":["100g oats","300ml saved sødmælk"],"instructions":["Cook oats","Add banana"],"why":"...","priceSource":"saved product memory/estimate","usedProducts":["..."]}]}],"shoppingList":[{"name":"...","amount":"...","price":20,"priceSource":"saved product memory/estimate/missing","confidence":"high/medium/low","reason":"used in 3 meals","needsPrice":false}],"missingData":["..."],"upgradeIdeas":["cheaper/better alternatives"]}`;
     const res = await callGeminiJSON(prompt, state.useSearch);
     state.plan = res; save(); render(); toast('Weekly plan ready');
   }catch(e){

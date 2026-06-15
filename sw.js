@@ -1,4 +1,4 @@
-const CACHE = 'bulkmind-v17-storage-resilience';
+const CACHE = 'bulkmind-v18-storage-resilience';
 const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.json', '/offline.html', '/icon-192.png', '/icon-512.png', '/assets/shake.svg', '/assets/meal.svg', '/assets/grocery.svg', '/assets/train.svg', '/assets/progress.svg'];
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });

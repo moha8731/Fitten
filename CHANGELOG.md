@@ -1,7 +1,8 @@
-# BulkMind v16
+# BulkMind v17
 
-- Fixed Gemini 400 error: tool/search use is no longer combined with `response_mime_type: application/json`.
-- JSON prompts now force raw JSON and parse it safely when Google Search/tool mode is enabled.
-- Setup no longer gets stuck if Gemini fails; it falls back to a safe local bulking calculator.
-- Weekly planner no longer dead-ends on AI failure; it creates a local backup plan and explains what failed.
-- Updated service worker cache so iPhone gets the new build.
+- Fixed startup crashes when localStorage is blocked or unavailable.
+- Added memory-only fallback so the app can still open.
+- Added safer app boot error handling.
+- Updated service worker cache to v17 so iPhone can fetch the new build.
+
+Note: memory-only mode does not persist after closing the app. Use the hosted HTTPS Safari/Vercel version for persistent data.

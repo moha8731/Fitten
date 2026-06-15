@@ -1,7 +1,33 @@
-const VERSION = 'v16-gemini-json-tool-fix';
+const VERSION = 'v17-storage-resilience';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
+
+let storageMode = 'localStorage';
+const memoryStore = new Map();
+const storage = (() => {
+  try {
+    const testKey = '__bulkmind_storage_test__';
+    window.localStorage.setItem(testKey, '1');
+    window.localStorage.removeItem(testKey);
+    return window.localStorage;
+  } catch (e) {
+    storageMode = 'memory-only';
+    console.warn('BulkMind storage fallback active:', e);
+    return {
+      getItem: key => memoryStore.has(key) ? memoryStore.get(key) : null,
+      setItem: (key, value) => { memoryStore.set(key, String(value)); },
+      removeItem: key => { memoryStore.delete(key); }
+    };
+  }
+})();
+function clone(obj){
+  try { return structuredClone(obj); }
+  catch(e){ return JSON.parse(JSON.stringify(obj)); }
+}
+function safeId(){
+  return (crypto && crypto.randomUUID) ? safeId() : 'id_' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
 
 const defaults = {
   version: VERSION,
@@ -32,14 +58,14 @@ let generating = false;
 
 function loadState(){
   try{
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = storage.getItem(STORE_KEY);
     if(raw) return merge(defaults, JSON.parse(raw));
     for(const k of oldKeys){
-      const v = localStorage.getItem(k);
+      const v = storage.getItem(k);
       if(v){ const parsed = JSON.parse(v); return merge(defaults, normalizeOld(parsed)); }
     }
   }catch(e){ console.warn(e); }
-  return structuredClone(defaults);
+  return clone(defaults);
 }
 function normalizeOld(o){
   const n = {};
@@ -57,7 +83,7 @@ function merge(a,b){
   for(const k in b || {}) out[k] = k in a ? merge(a[k], b[k]) : b[k];
   return out;
 }
-function save(){ state.version = VERSION; localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function save(){ try{ state.version = VERSION; storage.setItem(STORE_KEY, JSON.stringify(state)); }catch(e){ console.warn('Save failed', e); toast('Storage is limited on this browser'); } }
 function $(sel, root=document){ return root.querySelector(sel); }
 function $all(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
 function esc(v=''){ return String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
@@ -96,7 +122,7 @@ function setTab(tab){ state.activeTab = tab; save(); render(); }
 function render(){
   app.innerHTML = `
     <header class="topbar">
-      <div class="brand" onclick="setTab('today')"><div class="logo">B</div><div class="title"><b>BulkMind</b><span>${esc(aiModeLabel())}</span></div></div>
+      <div class="brand" onclick="setTab('today')"><div class="logo">B</div><div class="title"><b>BulkMind</b><span>${esc(aiModeLabel())}${storageMode==='memory-only'?' · temporary storage':''}</span></div></div>
       <div class="spacer"></div>
       <button class="iconBtn" onclick="openSettings()">⚙️</button>
     </header>
@@ -117,8 +143,8 @@ function renderWelcome(){
       <div class="h1">A food app that actually tells you what to eat.</div>
       <p class="p">No messy leader dashboard. First connect Gemini, then BulkMind plans calories, macros, Danish-style budgets, meals, shakes and grocery lists around your goal.</p>
       <div class="aiBox" style="margin:14px 0">
-        <b>What changed in v13</b>
-        <p class="p">Pictures, simpler flows, AI at setup, weekly meal planner, product memory, dietary targets and less clutter.</p>
+        <b>What changed in v17</b>
+        <p class="p">Storage fallback, safer iPhone startup, AI setup, weekly planner, product memory, dietary targets and less clutter.</p>
       </div>
       <button class="btn" id="startSetup">Start setup</button>
       <button class="btn secondary" style="margin-top:10px" onclick="openSettings(true)">Connect Gemini first</button>
@@ -293,7 +319,7 @@ function openSettings(force=false){
   $('#saveSettings',m).addEventListener('click',()=>{ state.apiKey=$('#apiKey',m).value.trim(); state.retailerToken=$('#retailerToken',m).value.trim(); state.model=$('#model',m).value; save(); closeModal(); render(); toast('Saved'); });
   $('#testAI',m).addEventListener('click',async()=>{ state.apiKey=$('#apiKey',m).value.trim(); state.retailerToken=$('#retailerToken',m).value.trim(); state.model=$('#model',m).value; save(); try{ await callGeminiText('Reply with only: BulkMind AI connected.', false); toast('Gemini works'); }catch(e){ toast('AI error: '+e.message); } });
 }
-function resetApp(){ if(confirm('Delete all BulkMind data on this device?')){ localStorage.removeItem(STORE_KEY); state=structuredClone(defaults); closeModal(); render(); }}
+function resetApp(){ if(confirm('Delete all BulkMind data on this device?')){ storage.removeItem(STORE_KEY); state=clone(defaults); closeModal(); render(); }}
 
 function openSetup(){
   setupStep = 0;
@@ -524,7 +550,7 @@ async function lazyLog(){
 function openConfirmLog(item){
   openModal(`<div class="modalHead"><div><b>Confirm log</b><div class="tiny">AI estimate</div></div><button class="iconBtn" onclick="closeModal()">✕</button></div><section class="card"><div class="h2">${esc(item.name)}</div><div class="metricGrid">${metric('Kcal',Math.round(item.calories),state.targets.calories,pct(item.calories,state.targets.calories))}${metric('Protein',Math.round(item.protein)+'g',state.targets.protein+'g',pct(item.protein,state.targets.protein))}${metric('Fat',Math.round(item.fat)+'g',state.targets.fat+'g',pct(item.fat,state.targets.fat))}</div><p class="p">${esc(item.note||'')}</p><button class="btn" onclick='addMealToToday(${JSON.stringify(item).replace(/'/g,"&#39;")}); closeModal();'>Add to today</button></section>`);
 }
-function addMealToToday(m){ state.logs.push({id:crypto.randomUUID(), date:todayISO(), name:m.name||'Meal', calories:+m.calories||0, protein:+m.protein||0, carbs:+m.carbs||0, fat:+m.fat||0, source:'meal'}); save(); render(); toast('Logged'); }
+function addMealToToday(m){ state.logs.push({id:safeId(), date:todayISO(), name:m.name||'Meal', calories:+m.calories||0, protein:+m.protein||0, carbs:+m.carbs||0, fat:+m.fat||0, source:'meal'}); save(); render(); toast('Logged'); }
 function removeLog(id){ state.logs=state.logs.filter(l=>l.id!==id); save(); render(); }
 function saveMeal(m){ state.savedMeals.unshift({...m, savedAt:new Date().toISOString()}); state.savedMeals=state.savedMeals.slice(0,40); save(); toast('Saved meal'); }
 function togglePreferred(id){ const p=state.products.find(x=>x.id===id); if(p){p.preferred=!p.preferred; p.usage=(p.usage||0)+1; save(); render();} }
@@ -571,7 +597,7 @@ function openProductModal(){
 }
 function bindProductManual(modal){
   let preferred=true; $('#pPref',modal).onclick=()=>{ preferred=!preferred; $('#pPref',modal).classList.toggle('active',preferred); $('#pPref',modal).innerHTML=`${preferred?'✓':''} Prefer in AI shakes/meals`; };
-  $('#saveProduct',modal).onclick=()=>{ const p={id:crypto.randomUUID(),name:$('#pName',modal).value||'Product',category:$('#pCat',modal).value,unit:$('#pUnit',modal).value,calories:num($('#pCal',modal).value),protein:num($('#pPro',modal).value),carbs:num($('#pCarb',modal).value),fat:num($('#pFat',modal).value),price:num($('#pPrice',modal).value),packageSize:num($('#pSize',modal).value),preferred,usage:0,createdAt:new Date().toISOString()}; state.products.unshift(p); save(); closeModal(); render(); toast('Product saved'); };
+  $('#saveProduct',modal).onclick=()=>{ const p={id:safeId(),name:$('#pName',modal).value||'Product',category:$('#pCat',modal).value,unit:$('#pUnit',modal).value,calories:num($('#pCal',modal).value),protein:num($('#pPro',modal).value),carbs:num($('#pCarb',modal).value),fat:num($('#pFat',modal).value),price:num($('#pPrice',modal).value),packageSize:num($('#pSize',modal).value),preferred,usage:0,createdAt:new Date().toISOString()}; state.products.unshift(p); save(); closeModal(); render(); toast('Product saved'); };
   $('#photoLabel',modal).onclick=()=>$('#labelFile',modal).click();
   $('#labelFile',modal).onchange=async(e)=>{ const file=e.target.files[0]; if(!file) return; if(!requireAI()) return; toast('Reading label with Gemini...'); try{ const data=await fileToBase64(file); const res=await callGeminiJSON(`Read this nutrition label/product image. Return JSON only {"name":"","category":"milk/whey/oats/skyr/meat/rice/pasta/other","unit":"g or ml","calories":0,"protein":0,"carbs":0,"fat":0,"confidence":"low/medium/high","missing":["fields"]}. Values must be per 100g/ml.`,false,{mime:file.type,data}); $('#pName',modal).value=res.name||$('#pName',modal).value; $('#pCat',modal).value=res.category||'other'; $('#pUnit',modal).value=res.unit||'g'; $('#pCal',modal).value=res.calories||''; $('#pPro',modal).value=res.protein||''; $('#pCarb',modal).value=res.carbs||''; $('#pFat',modal).value=res.fat||''; toast('Label read'); }catch(err){ toast('Label failed'); } };
 }
@@ -579,9 +605,13 @@ function fileToBase64(file){ return new Promise((resolve,reject)=>{ const r=new 
 async function lookupBarcode(modal){
   const code=$('#barcode',modal).value.trim(); if(!code) return toast('Enter barcode');
   const out=$('#barcodeResult',modal); out.innerHTML='<div class="skeleton"></div>';
-  try{ const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`); const data=await r.json(); if(!data.product) throw new Error('not found'); const pr=data.product; const n=pr.nutriments||{}; const p={id:crypto.randomUUID(),name:pr.product_name || pr.brands || 'Scanned product',category:guessCat(pr.product_name+' '+pr.categories),unit:(pr.quantity||'').toLowerCase().includes('ml')?'ml':'g',calories:round(n['energy-kcal_100g']||0),protein:round(n.proteins_100g||0,1),carbs:round(n.carbohydrates_100g||0,1),fat:round(n.fat_100g||0,1),price:0,packageSize:0,preferred:false,usage:0,barcode:code,createdAt:new Date().toISOString()}; out.innerHTML=`<div class="item"><b>${esc(p.name)}</b><div class="tiny">${p.calories||'?'} kcal · ${p.protein||'?'}g protein · ${p.fat||'?'}g fat</div>${(!p.calories&&!p.protein)?'<p class="p"><span class="status warn">Missing nutrition</span> Upload label photo after saving.</p>':''}<button class="btn" id="saveLookup">Save product</button></div>`; $('#saveLookup',modal).onclick=()=>{state.products.unshift(p);save();closeModal();render();toast('Product saved');}; }catch(e){ out.innerHTML='<div class="empty"><b>Not found</b><p class="p">Add manually or scan nutrition label.</p></div>'; }
+  try{ const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`); const data=await r.json(); if(!data.product) throw new Error('not found'); const pr=data.product; const n=pr.nutriments||{}; const p={id:safeId(),name:pr.product_name || pr.brands || 'Scanned product',category:guessCat(pr.product_name+' '+pr.categories),unit:(pr.quantity||'').toLowerCase().includes('ml')?'ml':'g',calories:round(n['energy-kcal_100g']||0),protein:round(n.proteins_100g||0,1),carbs:round(n.carbohydrates_100g||0,1),fat:round(n.fat_100g||0,1),price:0,packageSize:0,preferred:false,usage:0,barcode:code,createdAt:new Date().toISOString()}; out.innerHTML=`<div class="item"><b>${esc(p.name)}</b><div class="tiny">${p.calories||'?'} kcal · ${p.protein||'?'}g protein · ${p.fat||'?'}g fat</div>${(!p.calories&&!p.protein)?'<p class="p"><span class="status warn">Missing nutrition</span> Upload label photo after saving.</p>':''}<button class="btn" id="saveLookup">Save product</button></div>`; $('#saveLookup',modal).onclick=()=>{state.products.unshift(p);save();closeModal();render();toast('Product saved');}; }catch(e){ out.innerHTML='<div class="empty"><b>Not found</b><p class="p">Add manually or scan nutrition label.</p></div>'; }
 }
 function guessCat(txt=''){ const t=txt.toLowerCase(); if(t.includes('mælk')||t.includes('milk'))return'milk'; if(t.includes('whey')||t.includes('protein'))return'whey'; if(t.includes('havre')||t.includes('oat'))return'oats'; if(t.includes('skyr'))return'skyr'; if(t.includes('kylling')||t.includes('chicken'))return'meat'; return'other'; }
 
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
-render();
+window.addEventListener('error', (event)=>{ console.warn('BulkMind runtime error', event.error || event.message); });
+try { render(); } catch (e) {
+  console.error(e);
+  app.innerHTML = `<main class="fatal"><div class="card"><b>BulkMind could not start</b><p class="p">The app hit a browser/storage issue. Try the hosted HTTPS Vercel link in Safari. If this is the Home Screen app, remove it and add it again from Safari.</p><button class="btn" onclick="location.reload()">Retry</button></div></main>`;
+}

@@ -24,3 +24,7 @@ Use:
 6. Redeploy.
 
 Then open the app -> Settings -> enable `Use hidden Vercel server key` -> Test AI.
+
+
+## v22 Daily Loop
+The Today screen is now a For You-style action feed with daily missions, streaks, one-tap usual shake, and quick cards. AI is used behind the UI instead of being the whole UI.

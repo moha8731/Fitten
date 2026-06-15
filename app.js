@@ -1,4 +1,4 @@
-const VERSION = 'v21-price-intelligence';
+const VERSION = 'v22-daily-loop';
 const STORE_KEY = 'bulkmind_revamp_v14';
 const oldKeys = ['bulkmind_revamp_v13','bulkmind:v12','bulkmind_v12','bulkmind:v13'];
 const app = document.getElementById('app');
@@ -33,6 +33,8 @@ function safeId(){
 const defaults = {
   version: VERSION,
   activeTab: 'today',
+  lastFeedNudge: '',
+  dailyWins: [],
   setupDone: false,
   apiKey: '',
   useServerKeys: true,
@@ -280,15 +282,16 @@ function renderNav(){
   return `<nav class="bottomNav">${tabs.map(t=>`<button class="navItem ${state.activeTab===t[0]?'active':''}" onclick="setTab('${t[0]}')"><span>${t[1]}</span><span>${t[2]}</span></button>`).join('')}</nav>`;
 }
 function renderWelcome(){
-  return `<section class="card hero">
+  return `<section class="card hero compactHero">
     <img src="assets/shake.svg" alt="BulkMind shake illustration">
     <div class="heroBody">
-      <div class="eyebrow">AI-first revamp</div>
-      <div class="h1">A food app that actually tells you what to eat.</div>
-      <p class="p">No messy leader dashboard. First connect Gemini, then BulkMind plans calories, macros, Danish-style budgets, meals, shakes and grocery lists around your goal.</p>
-      <div class="aiBox" style="margin:14px 0">
-        <b>What changed in v21</b>
-        <p class="p">Price scout, 10% buffer, sanity checks, action cards, fewer chat-box answers.</p>
+      <div class="eyebrow">v22 daily loop</div>
+      <div class="h1">Open it. Know what to do. Done.</div>
+      <p class="p">BulkMind is now built around a fast For You feed: missions, streaks, one-tap shakes, product memory and useful price decisions — not long AI chat boxes.</p>
+      <div class="missionPreview">
+        <div><b>🔥 Daily streak</b><span>eat + log + progress</span></div>
+        <div><b>🥤 One-tap rescue</b><span>fix today fast</span></div>
+        <div><b>🛒 Smart shop</b><span>buy only what matters</span></div>
       </div>
       <button class="btn" id="startSetup">Start setup</button>
       <button class="btn secondary" style="margin-top:10px" onclick="openSettings(true)">Connect Gemini first</button>
@@ -313,33 +316,41 @@ function renderToday(){
   const t = totals(); const target = state.targets;
   const gap = Math.max(0, Math.round(target.calories - t.calories));
   const proteinGap = Math.max(0, Math.round(target.protein - t.protein));
-  const score = Math.round((pct(t.calories,target.calories)*.42 + pct(t.protein,target.protein)*.38 + (state.workouts.some(w=>w.date===todayISO())?100:35)*.20));
-  const next = gap > 700 ? `Make a ${Math.min(950, Math.max(550, gap))} kcal shake` : proteinGap > 25 ? `Get ${proteinGap}g protein` : 'Log weight or train';
+  const score = bulkScore(t);
+  const next = nextMove(gap, proteinGap);
   const todayMeals = (state.plan?.days||[]).find(d=>d.date===todayISO() || d.day?.toLowerCase()==='today')?.meals || (state.plan?.days?.[0]?.meals || []);
+  const feed = buildActionFeed(gap, proteinGap, t, todayMeals);
   return `
-  <div class="screenTitle">Today</div>
-  <section class="card hero">
-    <img src="assets/progress.svg" alt="Progress illustration">
-    <div class="heroBody">
-      <div class="row between"><span class="status ${aiReady()?'':'warn'}">${aiReady()?'Gemini active':'Connect AI'}</span><span class="pill">Bulk score ${score}</span></div>
-      <div class="h1">${next}</div>
-      <p class="p">${state.profile.weight} → ${state.profile.targetWeight} kg · ${state.targets.calories} kcal · ${state.targets.protein}g protein.</p>
-      <div class="metricGrid">
-        ${metric('Kcal', Math.round(t.calories), target.calories)}
-        ${metric('Protein', Math.round(t.protein)+'g', target.protein+'g', pct(t.protein,target.protein))}
-        ${metric('Fat', Math.round(t.fat)+'g', target.fat+'g', pct(t.fat,target.fat))}
-      </div>
-      <div class="grid2" style="margin-top:12px">
-        <button class="btn" onclick="quickShake()">🥤 Fix calories</button>
-        <button class="btn secondary" onclick="openQuickLog()">⚡ Log food</button>
-      </div>
+  <div class="screenTitle">For you</div>
+  <section class="card dopamineHero">
+    <div class="row between"><span class="status ${score>75?'':'warn'}">${score>75?'On track':'Needs move'}</span><span class="pill">🔥 ${streakDays()} day streak</span></div>
+    <div class="h1">${esc(next.title)}</div>
+    <p class="p">${esc(next.subtitle)}</p>
+    <div class="ringRow">
+      ${miniRing('Kcal', t.calories, target.calories)}
+      ${miniRing('Protein', t.protein, target.protein, 'g')}
+      ${miniRing('Score', score, 100)}
+    </div>
+    <div class="quickDock">
+      <button onclick="quickShake()"><span>🥤</span><b>Fix</b></button>
+      <button onclick="openQuickLog()"><span>⚡</span><b>Log</b></button>
+      <button onclick="logUsualShake()"><span>⭐</span><b>Usual</b></button>
+      <button onclick="setTab('planner')"><span>🛒</span><b>Plan</b></button>
     </div>
   </section>
-  <div class="sectionHeader"><h2>Planned today</h2><span>${todayMeals.length?todayMeals.length+' meals':'No plan yet'}</span></div>
-  ${todayMeals.length ? todayMeals.slice(0,5).map(mealCard).join('') : `<div class="empty"><b>No weekly plan</b><p class="p">Make a plan with store, budget, people and dietary rules.</p><button class="btn small" onclick="setTab('planner')">Create plan</button></div>`}
-  <div class="sectionHeader"><h2>Logged today</h2><span>${dayLog().length} entries</span></div>
-  ${dayLog().length ? `<div class="list">${dayLog().map((l,i)=>`<div class="item"><div class="row between"><b>${esc(l.name)}</b><button class="btn small secondary danger" onclick="removeLog('${l.id}')">Delete</button></div><div class="tiny">${Math.round(l.calories)} kcal · ${Math.round(l.protein)}g protein · ${Math.round(l.fat)}g fat</div></div>`).join('')}</div>` : `<div class="empty"><b>Nothing logged yet</b><p class="p">Use quick log or add a planned meal.</p></div>`}
-  <section class="card aiBox"><b>Coach note</b><p class="p">${coachNote(t,gap,proteinGap)}</p><button class="btn secondary" onclick="askCoachToday()">Ask AI what to do now</button></section>`;
+
+  ${renderMissionBoard(t)}
+
+  <div class="sectionHeader compact"><h2>Next cards</h2><span>swipe brain, tap action</span></div>
+  ${renderForYouDeck(feed)}
+
+  <div class="sectionHeader compact"><h2>Today’s food</h2><span>${dayLog().length} logs</span></div>
+  ${dayLog().length ? `<div class="list compactList">${dayLog().slice().reverse().map(l=>`<div class="item row between"><div><b>${esc(l.name)}</b><div class="tiny">${Math.round(l.calories)} kcal · ${Math.round(l.protein)}g protein</div></div><button class="iconBtn danger" onclick="removeLog('${l.id}')">×</button></div>`).join('')}</div>` : `<div class="empty tight"><b>No logs yet</b><p class="p">Tap Log, Usual, or Fix. It should take under 10 seconds.</p></div>`}
+
+  <div class="sectionHeader compact"><h2>Planned meals</h2><span>${todayMeals.length?todayMeals.length+' options':'none'}</span></div>
+  ${todayMeals.length ? todayMeals.slice(0,3).map(mealCard).join('') : `<div class="empty tight"><b>No plan yet</b><p class="p">Generate a weekly plan once, then Today becomes automatic.</p><button class="btn small" onclick="setTab('planner')">Create plan</button></div>`}
+
+  <section class="card coachBrief"><div class="row between"><div><b>Coach says</b><p class="p">${coachNote(t,gap,proteinGap)}</p></div><button class="btn small secondary" onclick="askCoachToday()">Ask</button></div></section>`;
 }
 function metric(label, value, target, percentage){
   const p = percentage ?? pct(Number(value)||0, Number(target)||1);
@@ -350,6 +361,89 @@ function coachNote(t,gap,pg){
   if(gap>1000) return `You are ${gap} kcal behind. Use a low-volume shake and one easy meal, not one insane giant shake.`;
   if(pg>35) return `Protein is the weak point. Use skyr, whey, chicken, eggs or a saved product that you already use.`;
   return 'You are close. Keep it simple: finish calories, hit protein, and log weight tomorrow morning.';
+}
+
+function firstName(){ return (state.profile.name || 'bro').trim().split(/\s+/)[0]; }
+function bulkScore(t=totals()){
+  return Math.round((pct(t.calories,state.targets.calories)*.44 + pct(t.protein,state.targets.protein)*.36 + (state.weights.some(w=>w.date===todayISO())?100:40)*.10 + (state.workouts.some(w=>w.date===todayISO())?100:40)*.10));
+}
+function nextMove(gap, proteinGap){
+  if(gap > 900) return {title:`${firstName()}, fix ${gap} kcal`, subtitle:'One shake + one simple meal. No long chat. Just tap Fix.'};
+  if(gap > 350) return {title:`${gap} kcal left`, subtitle:'You are close enough to finish with a snack or saved shake.'};
+  if(proteinGap > 25) return {title:`Protein gap: ${proteinGap}g`, subtitle:'Use skyr, eggs, whey or a saved high-protein product.'};
+  if(!state.weights.some(w=>w.date===todayISO())) return {title:'Log weight in 5 sec', subtitle:'The weekly adjustment only works if weight trend is real.'};
+  return {title:'Tiny win secured', subtitle:'Keep the streak alive. Add one real log or prep tomorrow.'};
+}
+function miniRing(label, value, target, suffix=''){
+  const p = pct(value,target); const deg = Math.min(100,p)*3.6;
+  return `<div class="miniRing" style="--deg:${deg}deg"><div><b>${label==='Score'?Math.round(value):Math.round(value)}${suffix}</b><span>${esc(label)}</span></div></div>`;
+}
+function streakDays(){
+  let streak=0;
+  for(let i=0;i<90;i++){
+    const d=new Date(); d.setDate(d.getDate()-i); const iso=d.toISOString().slice(0,10);
+    const hasLog=state.logs.some(l=>l.date===iso);
+    const hasWeight=state.weights.some(w=>w.date===iso);
+    if(hasLog || hasWeight) streak++; else if(i>0) break;
+  }
+  return streak;
+}
+function renderMissionBoard(t){
+  const missions = dailyMissions(t);
+  const done = missions.filter(m=>m.done).length;
+  return `<section class="card missionBoard"><div class="row between"><div><div class="eyebrow">Daily loop</div><div class="h2">${done}/${missions.length} wins today</div></div><span class="pill">+${done*35} XP</span></div>
+    <div class="missionList">${missions.map(m=>`<button class="mission ${m.done?'done':''}" onclick="${m.action}"><span>${m.done?'✅':m.icon}</span><div><b>${esc(m.title)}</b><small>${esc(m.subtitle)}</small></div></button>`).join('')}</div>
+  </section>`;
+}
+function dailyMissions(t){
+  const hasFood = dayLog().length>0;
+  const kcal80 = pct(t.calories,state.targets.calories)>=80;
+  const protein80 = pct(t.protein,state.targets.protein)>=80;
+  const hasWeight = state.weights.some(w=>w.date===todayISO());
+  const hasPlan = !!state.plan;
+  return [
+    {icon:'⚡', title:'Log one thing', subtitle:'keep the app alive', done:hasFood, action:'openQuickLog()'},
+    {icon:'🥤', title:'Fix calories', subtitle:kcal80?'calories mostly done':'make one rescue move', done:kcal80, action:'quickShake()'},
+    {icon:'💪', title:'Protein check', subtitle:protein80?'protein handled':'close protein gap', done:protein80, action:'quickMeal()'},
+    {icon:'⚖️', title:'Weight trend', subtitle:hasWeight?'logged today':'5 sec morning log', done:hasWeight, action:'openWeightLog()'},
+    {icon:'🛒', title:'Plan/shop', subtitle:hasPlan?'weekly plan exists':'create real shop list', done:hasPlan, action:"setTab('planner')"}
+  ];
+}
+function buildActionFeed(gap, proteinGap, t, meals=[]){
+  const cards=[];
+  if(gap>350) cards.push({type:'rescue', icon:'🥤', title:'Calorie rescue', text:`${gap} kcal left. Make a realistic shake using your saved products.`, primary:'Make shake', action:'quickShake()', secondary:'Use usual', secondaryAction:'logUsualShake()'});
+  if(proteinGap>20) cards.push({type:'protein', icon:'💪', title:'Protein gap', text:`${proteinGap}g protein missing. Generate a fast high-protein meal, not a paragraph.`, primary:'Make meal', action:'quickMeal()'});
+  if(!state.products.length) cards.push({type:'product', icon:'🥛', title:'Save your first product', text:'Add your real milk/whey/oats so AI stops guessing ingredients.', primary:'Add product', action:'openProductModal()'});
+  else if(state.products.filter(p=>p.preferred).length===0) cards.push({type:'product', icon:'⭐', title:'Pick default products', text:'Mark your normal milk/whey as preferred so shakes become automatic.', primary:'Open products', action:"setTab('food')"});
+  if(!state.plan) cards.push({type:'shop', icon:'🛒', title:'Make the week easy', text:'Generate one shopping list with budget, people, equipment and price buffer.', primary:'Create plan', action:"setTab('planner')"});
+  if(!state.weights.some(w=>w.date===todayISO())) cards.push({type:'weight', icon:'⚖️', title:'5 second progress', text:'Log weight. This is what makes BulkMind better than ChatGPT.', primary:'Log weight', action:'openWeightLog()'});
+  if(meals.length) cards.push({type:'meal', icon:'🍽️', title:'Use planned food', text:'Tap a planned meal and log your portion instead of thinking.', primary:'Show meals', action:"document.querySelector('.mealCard')?.scrollIntoView({behavior:'smooth'})"});
+  cards.push({type:'price', icon:'💸', title:'Make it cheaper', text:'Scan one price/product. The app learns your real bulk economy.', primary:'Scan price', action:'openProductModal()'});
+  return cards.slice(0,6);
+}
+function renderForYouDeck(cards){
+  return `<div class="forYouDeck">${cards.map(c=>`<article class="feedCard ${esc(c.type)}"><div class="feedIcon">${c.icon}</div><div><b>${esc(c.title)}</b><p>${esc(c.text)}</p><div class="row wrap"><button class="btn small" onclick="${c.action}">${esc(c.primary)}</button>${c.secondary?`<button class="btn small secondary" onclick="${c.secondaryAction}">${esc(c.secondary)}</button>`:''}</div></div></article>`).join('')}</div>`;
+}
+function logUsualShake(){
+  const milk = state.products.find(p=>p.preferred && /milk|mælk|sødmælk|letmælk|minimælk|skummet/i.test(p.name+' '+p.category)) || state.products.find(p=>/milk|mælk/i.test(p.name+' '+p.category));
+  const whey = state.products.find(p=>p.preferred && /whey|protein/i.test(p.name+' '+p.category)) || state.products.find(p=>/whey|protein/i.test(p.name+' '+p.category));
+  const oats = state.products.find(p=>/oat|havre/i.test(p.name+' '+p.category));
+  const parts=[];
+  let cal=0, pro=0, carbs=0, fat=0;
+  function addProduct(prod, amount, label, fallback){
+    const f=fallback || {};
+    const kcal=(prod?.calories ?? f.calories ?? 0)*amount/100;
+    const pr=(prod?.protein ?? f.protein ?? 0)*amount/100;
+    const ca=(prod?.carbs ?? f.carbs ?? 0)*amount/100;
+    const fa=(prod?.fat ?? f.fat ?? 0)*amount/100;
+    cal+=kcal; pro+=pr; carbs+=ca; fat+=fa; parts.push(`${amount}${prod?.unit||f.unit||'g'} ${prod?.name||label}`);
+  }
+  addProduct(milk, 500, 'whole milk', {calories:64,protein:3.4,carbs:4.8,fat:3.5,unit:'ml'});
+  addProduct(oats, 80, 'oats', {calories:370,protein:13,carbs:60,fat:7,unit:'g'});
+  cal+=105; pro+=1.3; carbs+=27; fat+=0.4; parts.push('1 banana');
+  cal+=180; pro+=7; carbs+=6; fat+=15; parts.push('30g peanut butter');
+  if(whey){ addProduct(whey, 30, 'whey', {calories:400,protein:75,carbs:8,fat:7,unit:'g'}); }
+  addMealToToday({name:'Usual bulk shake', calories:round(cal), protein:round(pro), carbs:round(carbs), fat:round(fat), ingredients:parts, source:'usual-shake'});
 }
 
 function renderFood(){
